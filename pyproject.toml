@@ -1,0 +1,17 @@
+[tool.poetry]
+name = "org-foundry-sync"
+version = "0.1.0"
+description = "Allow syncing journal notes from FoundryVTT to org files."
+authors = ["Florian Bergmann <Bergmann.F@gmail.com>"]
+license = "MIT"
+
+[tool.poetry.dependencies]
+python = "^3.9"
+orgparse = "^0.2.4"
+playwright = "^1.14.1"
+
+[tool.poetry.dev-dependencies]
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
