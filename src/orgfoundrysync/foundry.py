@@ -50,12 +50,14 @@ class FoundryJournalEntry:
         pass
 
 
-def foundry_graph(fs: List[Union[FoundryFolder, FoundryJournalEntry]]):
-    """Build a graph structure for Foundry dataclasses that have parents.
+def foundry_linearize(fs: List[Union[FoundryFolder, FoundryJournalEntry]]):
+    """Build a linearization for Foundry dataclasses.
 
-    :returns: Dict[FoundryClass, List]
+    In this case all instances should come before their childrens.
+
+    :returns: List[FoundryClass]
     """
-    graph: Dict[Any, List] = {}
+    ordering: List = []
     q = queue.Queue()
     for f in fs:
         q.put(f)
@@ -65,10 +67,10 @@ def foundry_graph(fs: List[Union[FoundryFolder, FoundryJournalEntry]]):
             if f.parent not in g:
                 q.put(f)
             else:
-                graph[f.parent].append(f)
+                ordering.append(f)
         else:
-            graph[f] = []
-    return graph
+            ordering.append(f)
+    return ordering
 
 
 class Foundry:
