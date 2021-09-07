@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
 
 import asyncio
+import dataclasses
+import queue
+import graphlib
 import os
 import sys
+from typing import Any, Dict, Optional, List, Union
 
 from playwright.async_api import async_playwright
 
@@ -15,12 +19,80 @@ def store_journal_entry(e):
     print(f"Storing journal entry {e}")
 
 
+@dataclasses.dataclass(frozen=True, eq=True)
+class FoundryFolder:
+    _id: str
+    name: str
+    type: str = "JournalEntry"
+    description: Optional[str] = ""
+    parent: Optional[str] = None
+    sorting: Optional[str] = "a"
+    sort: Optional[int] = 0
+    color: Optional[str] = None
+    flags: Dict[Any, Any] = dataclasses.field(default_factory=dict, hash=False)
+
+    def store(self):
+        pass
+
+
+@dataclasses.dataclass(frozen=True, eq=True)
+class FoundryJournalEntry:
+    _id: str
+    name: str
+    content: str
+    img: Optional[str]
+    folder: Optional[str]
+    sort: int
+    permission: Dict[Any, Any] = dataclasses.field(default_factory=dict, hash=False)
+    flags: Dict[Any, Any] = dataclasses.field(default_factory=dict, hash=False)
+
+    def store(self):
+        pass
+
+
+def foundry_graph(fs: List[Union[FoundryFolder, FoundryJournalEntry]]):
+    """Build a graph structure for Foundry dataclasses that have parents.
+
+    :returns: Dict[FoundryClass, List]
+    """
+    graph: Dict[Any, List] = {}
+    q = queue.Queue()
+    for f in fs:
+        q.put(f)
+    while not q.empty():
+        f = q.get(True)
+        if f.parent:
+            if f.parent not in g:
+                q.put(f)
+            else:
+                graph[f.parent].append(f)
+        else:
+            graph[f] = []
+    return graph
+
+
 class Foundry:
     def __init__(self, url):
         self.url = url
         self.browser = None
-        self.folders = None
-        self.journal_entries = None
+        self._folders = None
+        self._journal_entries = None
+
+    @property
+    def folders(self):
+        return self._folders
+
+    @folders.setter
+    def folders(self, folders):
+        self._folders = [FoundryFolder(**folder) for folder in folders]
+
+    @property
+    def journal_entries(self):
+        return self._journal_entries
+
+    @journal_entries.setter
+    def journal_entries(self, entries):
+        self._journal_entries = [FoundryJournalEntry(**entry) for entry in entries]
 
     async def _launch(self, playwright=None):
         if not playwright:
@@ -34,7 +106,7 @@ class Foundry:
             page = await self.browser.new_page()
             await page.goto(self.url + "/join")
             await page.select_option("select[name=userid]", label="Gamemaster")
-            await page.fill("input[name=password]", os.getenv("FOUNDRY_GM"))
+            await page.fill("input[name=password]", os.getenv("FOUNDRY_SYNC_PASSWORD"))
             await page.click("button[name=join]")
             return page
 

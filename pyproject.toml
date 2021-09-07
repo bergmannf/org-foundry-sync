@@ -1,5 +1,5 @@
 [tool.poetry]
-name = "org-foundry-sync"
+name = "orgfoundrysync"
 version = "0.1.0"
 description = "Allow syncing journal notes from FoundryVTT to org files."
 authors = ["Florian Bergmann <Bergmann.F@gmail.com>"]
