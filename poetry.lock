@@ -43,6 +43,14 @@ optional = false
 python-versions = "*"
 
 [[package]]
+name = "pypandoc"
+version = "1.6.3"
+description = "Thin wrapper for pandoc."
+category = "main"
+optional = false
+python-versions = "*"
+
+[[package]]
 name = "websockets"
 version = "9.1"
 description = "An implementation of the WebSocket Protocol (RFC 6455 & 7692)"
@@ -53,7 +61,7 @@ python-versions = ">=3.6.1"
 [metadata]
 lock-version = "1.1"
 python-versions = "^3.9"
-content-hash = "19256d5351571812428ef88272682ca11b5808616015c7b7af1980bbb348381e"
+content-hash = "dfe625dc3a858898f95e909e5624194e9fdadde79cc6b07eb84f5d9997b70402"
 
 [metadata.files]
 greenlet = [
@@ -122,6 +130,10 @@ playwright = [
 pyee = [
     {file = "pyee-8.2.2-py2.py3-none-any.whl", hash = "sha256:c09f56e36eb10bf23aa2aacf145f690ded75b990a3d9523fd478b005940303d2"},
     {file = "pyee-8.2.2.tar.gz", hash = "sha256:5c7e60f8df95710dbe17550e16ce0153f83990c00ef744841b43f371ed53ebea"},
+]
+pypandoc = [
+    {file = "pypandoc-1.6.3-py3-none-win_amd64.whl", hash = "sha256:ed2178f0bfc77e565678c10dd7b57143af01a28d6f9d035995518b5e5b7b877b"},
+    {file = "pypandoc-1.6.3.tar.gz", hash = "sha256:95a331f5ef74adb9557e9961d784c30ba73bd0d62e7736bb5d9ce74888b9f438"},
 ]
 websockets = [
     {file = "websockets-9.1-cp36-cp36m-macosx_10_9_x86_64.whl", hash = "sha256:d144b350045c53c8ff09aa1cfa955012dd32f00c7e0862c199edcabb1a8b32da"},

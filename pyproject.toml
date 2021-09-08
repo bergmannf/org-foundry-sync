@@ -9,6 +9,7 @@ license = "MIT"
 python = "^3.9"
 orgparse = "^0.2.4"
 playwright = "^1.14.1"
+pypandoc = "^1.6.3"
 
 [tool.poetry.dev-dependencies]
 

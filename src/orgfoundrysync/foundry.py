@@ -2,13 +2,13 @@
 
 import asyncio
 import dataclasses
-import queue
-import graphlib
+import json
 import os
 import sys
 from typing import Any, Dict, Optional, List, Union
 
 from playwright.async_api import async_playwright
+import pypandoc
 
 
 def store_folder(f):
@@ -31,8 +31,36 @@ class FoundryFolder:
     color: Optional[str] = None
     flags: Dict[Any, Any] = dataclasses.field(default_factory=dict, hash=False)
 
-    def store(self):
-        pass
+    def read_metadata(self, root_path: str, folders: List):
+        path = "/".join([root_path, self.path(folders), ".orgfoundrysync"])
+        if not os.path.exists(path):
+            return {}
+        with open(path) as metadata:
+            return json.load(metadata)
+
+    def write_metadata(self, root_path: str, folders: List):
+        path = "/".join([root_path, self.path(folders), ".orgfoundrysync"])
+        data = self.read_metadata(root_path, folders)
+        data[self.path(folders)] = self._id
+        with open(path, "w") as metadata:
+            metadata.write(json.dumps(data))
+
+    def path(self, folders: List):
+        if self.parent == None:
+            return self.name
+        parent_folder = [f for f in folders if f._id == self.parent][0]
+        return "/".join([parent_folder.path(folders), self.name])
+
+    def store(self, root_path: str, folders: List):
+        """Create the folder on the filesystem.#!/usr/bin/env python
+
+        TODO: Store the _id in a hidden file inside the folder."""
+        if not root_path:
+            root_path = "."
+        path = self.path(folders)
+        path = "/".join([root_path, path])
+        os.makedirs(path, exist_ok=True)
+        self.write_metadata(root_path, folders)
 
 
 @dataclasses.dataclass(frozen=True, eq=True)
@@ -46,31 +74,52 @@ class FoundryJournalEntry:
     permission: Dict[Any, Any] = dataclasses.field(default_factory=dict, hash=False)
     flags: Dict[Any, Any] = dataclasses.field(default_factory=dict, hash=False)
 
-    def store(self):
-        pass
-
-
-def foundry_linearize(fs: List[Union[FoundryFolder, FoundryJournalEntry]]):
-    """Build a linearization for Foundry dataclasses.
-
-    In this case all instances should come before their childrens.
-
-    :returns: List[FoundryClass]
-    """
-    ordering: List = []
-    q = queue.Queue()
-    for f in fs:
-        q.put(f)
-    while not q.empty():
-        f = q.get(True)
-        if f.parent:
-            if f.parent not in g:
-                q.put(f)
-            else:
-                ordering.append(f)
+    def parent(self, folders: List) -> FoundryFolder:
+        if not self.folder:
+            return None
         else:
-            ordering.append(f)
-    return ordering
+            return [f for f in folders if f._id == self.folder][0]
+
+    def read_metadata(self, root_path: str, folders: List):
+        path = "/".join(
+            [root_path, self.parent(folders).path(folders), ".orgfoundrysync"]
+        )
+        with open(path) as metadata:
+            return json.load(metadata)
+
+    def write_metadata(self, root_path: str, folders: List):
+        path = self.path(root_path, folders)
+        data = self.read_metadata(root_path, folders)
+        data[path] = self._id
+        location = "/".join(
+            [root_path, self.parent(folders).path(folders), ".orgfoundrysync"]
+        )
+        with open(location, "w") as metadata:
+            metadata.write(json.dumps(data))
+
+    def path(self, root_path: str, folders: List):
+        if self.folder:
+            self.parent(folders).store(root_path, folders)
+            path = self.parent(folders).path(folders)
+        else:
+            path = ""
+        return "/".join([path, self.name + ".org"])
+
+    def store(self, root_path: str, folders: List):
+        """Save the content in this FoundryJournalEntry to the filesystem.
+
+        TODO: Store the _id in a hidden file inside the folder."""
+        if not root_path:
+            root_path = "."
+        path = self.path(root_path, folders)
+        path = "/".join([root_path, path])
+        with open(path, "w") as f:
+            f.write(pypandoc.convert_text(self.content, "org", format="html"))
+        self.write_metadata(root_path, folders)
+
+    def load(self, root_path: str):
+        """Load the stored file from the filesystem again."""
+        pass
 
 
 class Foundry:
@@ -131,11 +180,8 @@ class Foundry:
     def store_notes(self):
         if not self.journal_entries:
             raise RuntimeError("Journal entries must be downloaded first.")
-        for folder in self.folders:
-            store_folder(folder)
-
         for entry in self.journal_entries:
-            store_journal_entry(entry)
+            entry.store("tmp", self.folders)
 
 
 if __name__ == "__main__":
