@@ -4,6 +4,7 @@ import asyncio
 import dataclasses
 import glob
 import json
+import re
 import os
 import sys
 from typing import Any, Dict, Optional, List, Union, Tuple
@@ -229,7 +230,13 @@ class LocalStorage:
             with open(f, "r") as fd:
                 orgpath = f.replace(".journalentry.foundrysync", "")
                 with open(orgpath, "r") as fd2:
-                    content = pypandoc.convert_text(fd2.read(), "html", format="org")
+                    c = fd2.read()
+                    content = pypandoc.convert_text(
+                        re.sub("(?P<entry>@JournalEntry\[.*\]{.*})", "=\g<entry>=", c),
+                        "html",
+                        format="org",
+                    )
+                    print(f"Content: {content}")
                     entry = json.load(fd)
                     entry["content"] = content
                     js.append(FoundryJournalEntry(**entry))
