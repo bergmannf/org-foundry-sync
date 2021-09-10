@@ -2,6 +2,7 @@
 
 import asyncio
 import dataclasses
+import glob
 import json
 import os
 import sys
@@ -163,10 +164,13 @@ class LocalStorage:
         self.journalentries = journalentries
 
     def write_metadata(self, f: Union[FoundryFolder, FoundryJournalEntry]):
-        pass
-
-    def read_metadata(self, f: Union[FoundryFolder, FoundryJournalEntry]):
-        pass
+        obj = dataclasses.asdict(f)
+        if isinstance(f, FoundryFolder):
+            path = ".".join([self.fullpath(f), "folder", "foundrysync"])
+        if isinstance(f, FoundryJournalEntry):
+            path = ".".join([self.fullpath(f), "journalentry", "foundrysync"])
+        with open(path, "w") as fd:
+            fd.write(json.dumps(obj))
 
     def fullpath(self, f: Union[FoundryFolder, FoundryJournalEntry]):
         return "/".join([self.root_directory, f.path(self.folders)])
@@ -180,6 +184,7 @@ class LocalStorage:
         elif isinstance(f, FoundryJournalEntry):
             with open(fullpath, "w") as fd:
                 fd.write(pypandoc.convert_text(f.content, "org", format="html"))
+        self.write_metadata(f)
 
     def write_all(self):
         """Write all FoundryObjects to the filesystem."""
@@ -189,14 +194,22 @@ class LocalStorage:
             self.write(n)
 
     @staticmethod
-    def read(self, path: str):
-        pass
-
-    @staticmethod
     def read_all(
-        self,
-    ) -> Tuple[List[FoundryFolder], List[FoundryJournalEntry]]:
-        pass
+        root_dir: str,
+    ):
+        folder_paths = glob.glob(root_dir + "/**/**.folder.foundrysync")
+        journal_entry_paths = glob.glob(root_dir + "/**/**.journalentry.foundrysync")
+        print(folder_paths)
+        print(journal_entry_paths)
+        fs = []
+        for f in folder_paths:
+            with open(f, "r") as fd:
+                fs.append(FoundryFolder(**json.load(fd)))
+        js = []
+        for f in journal_entry_paths:
+            with open(f, "r") as fd:
+                js.append(FoundryJournalEntry(**json.load(fd)))
+        return LocalStorage(root_dir, fs, js)
 
 
 if __name__ == "__main__":
@@ -206,3 +219,6 @@ if __name__ == "__main__":
         root_directory="./tmp", folders=folders, journalentries=notes
     )
     storage.write_all()
+    from_local = LocalStorage.read_all("./tmp")
+    print(from_local.folders)
+    print(from_local.journalentries)
