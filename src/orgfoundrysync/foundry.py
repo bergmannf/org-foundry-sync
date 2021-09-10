@@ -5,7 +5,7 @@ import dataclasses
 import json
 import os
 import sys
-from typing import Any, Dict, Optional, List, Union
+from typing import Any, Dict, Optional, List, Union, Tuple
 
 from playwright.async_api import async_playwright
 import pypandoc
@@ -51,17 +51,6 @@ class FoundryFolder:
         parent_folder = [f for f in folders if f._id == self.parent][0]
         return "/".join([parent_folder.path(folders), self.name])
 
-    def store(self, root_path: str, folders: List):
-        """Create the folder on the filesystem.#!/usr/bin/env python
-
-        TODO: Store the _id in a hidden file inside the folder."""
-        if not root_path:
-            root_path = "."
-        path = self.path(folders)
-        path = "/".join([root_path, path])
-        os.makedirs(path, exist_ok=True)
-        self.write_metadata(root_path, folders)
-
 
 @dataclasses.dataclass(frozen=True, eq=True)
 class FoundryJournalEntry:
@@ -97,29 +86,12 @@ class FoundryJournalEntry:
         with open(location, "w") as metadata:
             metadata.write(json.dumps(data))
 
-    def path(self, root_path: str, folders: List):
+    def path(self, folders: List):
         if self.folder:
-            self.parent(folders).store(root_path, folders)
             path = self.parent(folders).path(folders)
         else:
             path = ""
         return "/".join([path, self.name + ".org"])
-
-    def store(self, root_path: str, folders: List):
-        """Save the content in this FoundryJournalEntry to the filesystem.
-
-        TODO: Store the _id in a hidden file inside the folder."""
-        if not root_path:
-            root_path = "."
-        path = self.path(root_path, folders)
-        path = "/".join([root_path, path])
-        with open(path, "w") as f:
-            f.write(pypandoc.convert_text(self.content, "org", format="html"))
-        self.write_metadata(root_path, folders)
-
-    def load(self, root_path: str):
-        """Load the stored file from the filesystem again."""
-        pass
 
 
 class Foundry:
@@ -168,23 +140,69 @@ class Foundry:
             page = await self.login()
             await page.goto(self.url + "/game", wait_until="networkidle")
             await page.wait_for_selector('a[title="Journal Entries"]')
-            print("Getting journal entries")
-            self.journal_entries = await page.evaluate(
-                "() => { return game.journal.contents.map(j => j.toJSON()) }"
-            )
             print("Getting folders")
             self.folders = await page.evaluate(
                 '() => { return game.folders.filter(j => j.type === "JournalEntry").map(f => f.toJSON()) }'
             )
+            print("Getting journal entries")
+            self.journal_entries = await page.evaluate(
+                "() => { return game.journal.contents.map(j => j.toJSON()) }"
+            )
+            return [self.folders, self.journal_entries]
 
-    def store_notes(self):
-        if not self.journal_entries:
-            raise RuntimeError("Journal entries must be downloaded first.")
-        for entry in self.journal_entries:
-            entry.store("tmp", self.folders)
+
+class LocalStorage:
+    def __init__(
+        self,
+        root_directory: str,
+        folders: List[FoundryFolder],
+        journalentries: List[FoundryJournalEntry],
+    ):
+        self.root_directory = root_directory
+        self.folders = folders
+        self.journalentries = journalentries
+
+    def write_metadata(self, f: Union[FoundryFolder, FoundryJournalEntry]):
+        pass
+
+    def read_metadata(self, f: Union[FoundryFolder, FoundryJournalEntry]):
+        pass
+
+    def fullpath(self, f: Union[FoundryFolder, FoundryJournalEntry]):
+        return "/".join([self.root_directory, f.path(self.folders)])
+
+    def write(self, f: Union[FoundryFolder, FoundryJournalEntry]):
+        """Write a single FoundryObject to the fileysstem."""
+        fullpath = self.fullpath(f)
+        # TODO: Extract into polymorphism
+        if isinstance(f, FoundryFolder):
+            os.makedirs(fullpath, exist_ok=True)
+        elif isinstance(f, FoundryJournalEntry):
+            with open(fullpath, "w") as fd:
+                fd.write(pypandoc.convert_text(f.content, "org", format="html"))
+
+    def write_all(self):
+        """Write all FoundryObjects to the filesystem."""
+        for f in self.folders:
+            self.write(f)
+        for n in self.journalentries:
+            self.write(n)
+
+    @staticmethod
+    def read(self, path: str):
+        pass
+
+    @staticmethod
+    def read_all(
+        self,
+    ) -> Tuple[List[FoundryFolder], List[FoundryJournalEntry]]:
+        pass
 
 
 if __name__ == "__main__":
     f = Foundry(url=sys.argv[1])
-    asyncio.run(f.download_notes())
-    f.store_notes()
+    folders, notes = asyncio.run(f.download_notes())
+    storage = LocalStorage(
+        root_directory="./tmp", folders=folders, journalentries=notes
+    )
+    storage.write_all()
