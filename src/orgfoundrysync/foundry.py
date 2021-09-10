@@ -151,6 +151,25 @@ class Foundry:
             )
             return [self.folders, self.journal_entries]
 
+    async def safe_note(self, note: FoundryJournalEntry, playwright=None):
+        async with async_playwright() as p:
+            await self._launch(p)
+            script = """
+            () => {{
+            var note = game.journal.filter(j => j.id === "{note_id}")[0];
+            var data = note.data;
+            data.content = `{note_content}`;
+            note.update(data)
+            }}
+            """.format(
+                note_id=note._id, note_content=note.content
+            )
+            print(script)
+            page = await self.login()
+            await page.goto(self.url + "/game", wait_until="networkidle")
+            await page.wait_for_selector('a[title="Journal Entries"]')
+            await page.evaluate(script)
+
 
 class LocalStorage:
     def __init__(
@@ -208,17 +227,23 @@ class LocalStorage:
         js = []
         for f in journal_entry_paths:
             with open(f, "r") as fd:
-                js.append(FoundryJournalEntry(**json.load(fd)))
+                orgpath = f.replace(".journalentry.foundrysync", "")
+                with open(orgpath, "r") as fd2:
+                    content = pypandoc.convert_text(fd2.read(), "html", format="org")
+                    entry = json.load(fd)
+                    entry["content"] = content
+                    js.append(FoundryJournalEntry(**entry))
         return LocalStorage(root_dir, fs, js)
 
 
 if __name__ == "__main__":
     f = Foundry(url=sys.argv[1])
-    folders, notes = asyncio.run(f.download_notes())
-    storage = LocalStorage(
-        root_directory="./tmp", folders=folders, journalentries=notes
-    )
-    storage.write_all()
+    # folders, notes = asyncio.run(f.download_notes())
+    # storage = LocalStorage(
+    #     root_directory="./tmp", folders=folders, journalentries=notes
+    # )
+    # storage.write_all()
     from_local = LocalStorage.read_all("./tmp")
-    print(from_local.folders)
-    print(from_local.journalentries)
+    dragon_entry = [je for je in from_local.journalentries if je.name == "Dragons"][0]
+    print(dragon_entry)
+    asyncio.run(f.safe_note(dragon_entry))
