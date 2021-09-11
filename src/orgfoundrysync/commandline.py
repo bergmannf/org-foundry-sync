@@ -3,7 +3,9 @@
 import argparse
 import asyncio
 
-from .foundry import Foundry, FoundryJournalEntry, LocalStorage
+from playwright.async_api import async_playwright
+
+from .foundry import Foundry, LocalStorage
 
 
 def validate_args(args):
@@ -11,15 +13,6 @@ def validate_args(args):
     if args.command == "upload_note":
         if not args.note_path:
             raise RuntimeError("Can not upload a note without --note-path argument.")
-
-
-async def upload_note(foundry: Foundry, note: FoundryJournalEntry):
-    await foundry.upload_note(note)
-
-
-async def upload_notes(foundry: Foundry, storage: LocalStorage):
-    for note in storage.journalentries:
-        await upload_note(foundry, note)
 
 
 parser = argparse.ArgumentParser(description="Download foundryvtt journal notes.")
@@ -64,32 +57,48 @@ parser.add_argument(
 )
 
 
+async def run(args):
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=False, slow_mo=50)
+        foundry = Foundry(
+            url=args.foundry_url,
+            user=args.foundry_user,
+            password=args.foundry_password,
+            browser=browser,
+        )
+        if args.command == "download_notes":
+            print("Downloading notes from Foundry.")
+            folders, notes = await foundry.download_notes()
+            print("Notes Downloaded")
+            storage = LocalStorage(
+                root_directory=args.root_dir,
+                format=args.target_format,
+                folders=folders,
+                journalentries=notes,
+            )
+            storage.write_all()
+            print("Notes stored")
+        if args.command == "upload_notes":
+            storage = LocalStorage.read_all(args.root_dir, args.target_format)
+            print("Uploading all notes")
+            for note in storage.journalentries:
+                await foundry.upload_note(note)
+            print("Uploading finished")
+        if args.command == "upload_note":
+            storage = LocalStorage.read_all(args.root_dir, args.target_format)
+            note = next(
+                filter(
+                    lambda n: storage.fullpath(n) == args.note_path,
+                    storage.journalentries,
+                )
+            )
+            print(f"Uploading note: {note}")
+            await foundry.upload_note(note)
+        await browser.close()
+
+
 def main():
     args = parser.parse_args()
     validate_args(args)
 
-    foundry = Foundry(
-        url=args.foundry_url, user=args.foundry_user, password=args.foundry_password
-    )
-    if args.command == "download_notes":
-        print("Downloading notes from Foundry.")
-        folders, notes = asyncio.run(foundry.download_notes())
-        storage = LocalStorage(
-            root_directory=args.root_dir,
-            format=args.target_format,
-            folders=folders,
-            journalentries=notes,
-        )
-        storage.write_all()
-    if args.command == "upload_notes":
-        storage = LocalStorage.read_all(args.root_dir, args.target_format)
-        asyncio.run(upload_notes(foundry, storage))
-    if args.command == "upload_note":
-        storage = LocalStorage.read_all(args.root_dir, args.target_format)
-        note = next(
-            filter(
-                lambda n: storage.fullpath(n) == args.note_path, storage.journalentries
-            )
-        )
-        print(f"Uploading note: {note}")
-        asyncio.run(upload_note(foundry, note))
+    asyncio.run(run(args), debug=True)

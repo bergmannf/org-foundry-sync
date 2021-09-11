@@ -9,7 +9,7 @@ import os
 import sys
 from typing import Any, Dict, Optional, List, Union, Tuple
 
-from playwright.async_api import async_playwright
+from playwright.async_api import Browser
 import pypandoc
 
 
@@ -79,13 +79,13 @@ class FoundryJournalEntry:
 
 
 class Foundry:
-    def __init__(self, url, user="Gamemaster", password=None):
+    def __init__(self, url, browser: Browser, user="Gamemaster", password=None):
         self.url = url
         self.password = password or os.getenv("FOUNDRY_SYNC_PASSWORD")
         if not self.password:
             raise RuntimeError("Can not login to FoundryVTT without a password.")
         self.user = user
-        self.browser = None
+        self.browser = browser
         self._folders = None
         self._journal_entries = None
 
@@ -105,56 +105,43 @@ class Foundry:
     def journal_entries(self, entries):
         self._journal_entries = [FoundryJournalEntry(**entry) for entry in entries]
 
-    async def _launch(self, playwright=None):
-        if not playwright:
-            playwright = await async_playwright()
-        self.browser = await playwright.chromium.launch(headless=False, slow_mo=50)
+    async def login(self):
+        page = await self.browser.new_page()
+        await page.goto(self.url + "/join")
+        await page.select_option("select[name=userid]", label=self.user)
+        await page.fill("input[name=password]", self.password)
+        await page.click("button[name=join]")
+        return page
 
-    async def login(self, playwright=None):
-        async with async_playwright() as p:
-            if not self.browser:
-                await self._launch(p)
-            page = await self.browser.new_page()
-            await page.goto(self.url + "/join")
-            await page.select_option("select[name=userid]", label=self.user)
-            await page.fill("input[name=password]", self.password)
-            await page.click("button[name=join]")
-            return page
+    async def download_notes(self):
+        page = await self.login()
+        await page.goto(self.url + "/game", wait_until="networkidle")
+        await page.wait_for_selector('a[title="Journal Entries"]')
+        print("Downloading folders")
+        self.folders = await page.evaluate(
+            '() => { return game.folders.filter(j => j.type === "JournalEntry").map(f => f.toJSON()) }'
+        )
+        print("Downloading journal entries")
+        self.journal_entries = await page.evaluate(
+            "() => { return game.journal.contents.map(j => j.toJSON()) }"
+        )
+        return [self.folders, self.journal_entries]
 
-    async def download_notes(self, playwright=None):
-        async with async_playwright() as p:
-            if not self.browser:
-                await self._launch(p)
-            page = await self.login()
-            await page.goto(self.url + "/game", wait_until="networkidle")
-            await page.wait_for_selector('a[title="Journal Entries"]')
-            print("Downloading folders")
-            self.folders = await page.evaluate(
-                '() => { return game.folders.filter(j => j.type === "JournalEntry").map(f => f.toJSON()) }'
-            )
-            print("Downloading journal entries")
-            self.journal_entries = await page.evaluate(
-                "() => { return game.journal.contents.map(j => j.toJSON()) }"
-            )
-            return [self.folders, self.journal_entries]
-
-    async def upload_note(self, note: FoundryJournalEntry, playwright=None):
-        async with async_playwright() as p:
-            await self._launch(p)
-            script = """
-            () => {{
-            var note = game.journal.filter(j => j.id === "{note_id}")[0];
-            var data = note.data;
-            data.content = `{note_content}`;
-            note.update(data)
-            }}
-            """.format(
-                note_id=note._id, note_content=note.content
-            )
-            page = await self.login()
-            await page.goto(self.url + "/game", wait_until="networkidle")
-            await page.wait_for_selector('a[title="Journal Entries"]')
-            await page.evaluate(script)
+    async def upload_note(self, note: FoundryJournalEntry):
+        script = """
+        () => {{
+        var note = game.journal.filter(j => j.id === "{note_id}")[0];
+        var data = note.data;
+        data.content = `{note_content}`;
+        note.update(data)
+        }}
+        """.format(
+            note_id=note._id, note_content=note.content
+        )
+        page = await self.login()
+        await page.goto(self.url + "/game", wait_until="networkidle")
+        await page.wait_for_selector('a[title="Journal Entries"]')
+        await page.evaluate(script)
 
 
 class LocalStorage:
