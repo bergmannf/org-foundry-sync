@@ -5,6 +5,9 @@ description = "Allow syncing journal notes from FoundryVTT to org files."
 authors = ["Florian Bergmann <Bergmann.F@gmail.com>"]
 license = "MIT"
 
+[tool.poetry.scripts]
+orgfoundrysync = "orgfoundrysync.commandline:main"
+
 [tool.poetry.dependencies]
 python = "^3.9"
 playwright = "^1.14.1"
