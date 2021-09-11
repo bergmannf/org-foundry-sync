@@ -51,6 +51,13 @@ parser.add_argument(
     "--note-path", dest="note_path", type=str, help="The note to upload."
 )
 parser.add_argument(
+    "--target-format",
+    dest="target_format",
+    type=str,
+    default="org",
+    help="The format the notes should be converted to on the local filesystem.",
+)
+parser.add_argument(
     "command",
     choices=["download_notes", "upload_notes", "upload_note"],
     help="Command to execute. When choosing 'upload_note' '--note-path' must be provided as well.",
@@ -66,14 +73,17 @@ if args.command == "download_notes":
     print("Downloading notes from Foundry.")
     folders, notes = asyncio.run(foundry.download_notes())
     storage = LocalStorage(
-        root_directory=args.root_dir, folders=folders, journalentries=notes
+        root_directory=args.root_dir,
+        format=args.target_format,
+        folders=folders,
+        journalentries=notes,
     )
     storage.write_all()
 if args.command == "upload_notes":
-    storage = LocalStorage.read_all(args.root_dir)
+    storage = LocalStorage.read_all(args.root_dir, args.target_format)
     asyncio.run(upload_notes(foundry, storage))
 if args.command == "upload_note":
-    storage = LocalStorage.read_all(args.root_dir)
+    storage = LocalStorage.read_all(args.root_dir, args.target_format)
     note = next(
         filter(lambda n: storage.fullpath(n) == args.note_path, storage.journalentries)
     )

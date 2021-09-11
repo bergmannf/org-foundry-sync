@@ -70,22 +70,12 @@ class FoundryJournalEntry:
         with open(path) as metadata:
             return json.load(metadata)
 
-    def write_metadata(self, root_path: str, folders: List):
-        path = self.path(root_path, folders)
-        data = self.read_metadata(root_path, folders)
-        data[path] = self._id
-        location = "/".join(
-            [root_path, self.parent(folders).path(folders), ".orgfoundrysync"]
-        )
-        with open(location, "w") as metadata:
-            metadata.write(json.dumps(data))
-
-    def path(self, folders: List):
+    def path(self, folders: List, format: str):
         if self.folder:
             path = self.parent(folders).path(folders)
         else:
             path = ""
-        return "/".join([path, self.name + ".org"])
+        return "/".join([path, self.name + "." + format])
 
 
 class Foundry:
@@ -171,10 +161,12 @@ class LocalStorage:
     def __init__(
         self,
         root_directory: str,
+        format: str,
         folders: List[FoundryFolder],
         journalentries: List[FoundryJournalEntry],
     ):
         self.root_directory = root_directory
+        self.format = format
         self.folders = folders
         self.journalentries = journalentries
 
@@ -182,13 +174,18 @@ class LocalStorage:
         obj = dataclasses.asdict(f)
         if isinstance(f, FoundryFolder):
             path = ".".join([self.fullpath(f), "folder", "foundrysync"])
-        if isinstance(f, FoundryJournalEntry):
+        elif isinstance(f, FoundryJournalEntry):
             path = ".".join([self.fullpath(f), "journalentry", "foundrysync"])
+        else:
+            raise RuntimeError(f"Can not handle type {type(f)}.")
         with open(path, "w") as fd:
             fd.write(json.dumps(obj))
 
     def fullpath(self, f: Union[FoundryFolder, FoundryJournalEntry]):
-        return "/".join([self.root_directory, f.path(self.folders)])
+        if isinstance(f, FoundryFolder):
+            return "/".join([self.root_directory, f.path(self.folders)])
+        if isinstance(f, FoundryJournalEntry):
+            return "/".join([self.root_directory, f.path(self.folders, self.format)])
 
     def write(self, f: Union[FoundryFolder, FoundryJournalEntry]):
         """Write a single FoundryObject to the fileysstem."""
@@ -198,7 +195,7 @@ class LocalStorage:
             os.makedirs(fullpath, exist_ok=True)
         elif isinstance(f, FoundryJournalEntry):
             with open(fullpath, "w") as fd:
-                fd.write(pypandoc.convert_text(f.content, "org", format="html"))
+                fd.write(pypandoc.convert_text(f.content, self.format, format="html"))
         self.write_metadata(f)
 
     def write_all(self):
@@ -211,6 +208,7 @@ class LocalStorage:
     @staticmethod
     def read_all(
         root_dir: str,
+        source_format: str,
     ):
         print(f"Reading local data from {root_dir}")
         folder_paths = glob.glob(root_dir + "/**/**.folder.foundrysync", recursive=True)
@@ -226,16 +224,24 @@ class LocalStorage:
         for f in journal_entry_paths:
             print(f"Reading journal entry {f}")
             with open(f, "r") as fd:
-                orgpath = f.replace(".journalentry.foundrysync", "")
-                with open(orgpath, "r") as fd2:
+                contentpath = f.replace(".journalentry.foundrysync", "")
+                with open(contentpath, "r") as fd2:
                     c = fd2.read()
+                    if format == "org":
+                        # Must wrap the @JournalEntry in = signs for code formatting.
+                        # Otherwise it will be handled as a ref.
+                        c = (
+                            re.sub(
+                                "(?P<entry>@JournalEntry\[.*\]{.*})", "=\g<entry>=", c
+                            ),
+                        )
                     content = pypandoc.convert_text(
-                        re.sub("(?P<entry>@JournalEntry\[.*\]{.*})", "=\g<entry>=", c),
+                        c,
                         "html",
-                        format="org",
+                        format=source_format,
                     )
                     entry = json.load(fd)
                     entry["content"] = content
                     js.append(FoundryJournalEntry(**entry))
         print(f"Read {len(fs)} folders and {len(js)} journal entries.")
-        return LocalStorage(root_dir, fs, js)
+        return LocalStorage(root_dir, source_format, fs, js)
