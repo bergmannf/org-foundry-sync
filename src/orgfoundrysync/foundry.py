@@ -13,14 +13,6 @@ from playwright.async_api import async_playwright
 import pypandoc
 
 
-def store_folder(f):
-    print(f"Making folder {f}")
-
-
-def store_journal_entry(e):
-    print(f"Storing journal entry {e}")
-
-
 @dataclasses.dataclass(frozen=True, eq=True)
 class FoundryFolder:
     _id: str
@@ -97,8 +89,12 @@ class FoundryJournalEntry:
 
 
 class Foundry:
-    def __init__(self, url):
+    def __init__(self, url, user="Gamemaster", password=None):
         self.url = url
+        self.password = password or os.getenv("FOUNDRY_SYNC_PASSWORD")
+        if not self.password:
+            raise RuntimeError("Can not login to FoundryVTT without a password.")
+        self.user = user
         self.browser = None
         self._folders = None
         self._journal_entries = None
@@ -130,8 +126,8 @@ class Foundry:
                 await self._launch(p)
             page = await self.browser.new_page()
             await page.goto(self.url + "/join")
-            await page.select_option("select[name=userid]", label="Gamemaster")
-            await page.fill("input[name=password]", os.getenv("FOUNDRY_SYNC_PASSWORD"))
+            await page.select_option("select[name=userid]", label=self.user)
+            await page.fill("input[name=password]", self.password)
             await page.click("button[name=join]")
             return page
 
@@ -142,17 +138,17 @@ class Foundry:
             page = await self.login()
             await page.goto(self.url + "/game", wait_until="networkidle")
             await page.wait_for_selector('a[title="Journal Entries"]')
-            print("Getting folders")
+            print("Downloading folders")
             self.folders = await page.evaluate(
                 '() => { return game.folders.filter(j => j.type === "JournalEntry").map(f => f.toJSON()) }'
             )
-            print("Getting journal entries")
+            print("Downloading journal entries")
             self.journal_entries = await page.evaluate(
                 "() => { return game.journal.contents.map(j => j.toJSON()) }"
             )
             return [self.folders, self.journal_entries]
 
-    async def safe_note(self, note: FoundryJournalEntry, playwright=None):
+    async def upload_note(self, note: FoundryJournalEntry, playwright=None):
         async with async_playwright() as p:
             await self._launch(p)
             script = """
@@ -165,7 +161,6 @@ class Foundry:
             """.format(
                 note_id=note._id, note_content=note.content
             )
-            print(script)
             page = await self.login()
             await page.goto(self.url + "/game", wait_until="networkidle")
             await page.wait_for_selector('a[title="Journal Entries"]')
@@ -217,16 +212,19 @@ class LocalStorage:
     def read_all(
         root_dir: str,
     ):
-        folder_paths = glob.glob(root_dir + "/**/**.folder.foundrysync")
-        journal_entry_paths = glob.glob(root_dir + "/**/**.journalentry.foundrysync")
-        print(folder_paths)
-        print(journal_entry_paths)
+        print(f"Reading local data from {root_dir}")
+        folder_paths = glob.glob(root_dir + "/**/**.folder.foundrysync", recursive=True)
+        journal_entry_paths = glob.glob(
+            root_dir + "/**/**.journalentry.foundrysync", recursive=True
+        )
         fs = []
         for f in folder_paths:
+            print(f"Reading folder {f}")
             with open(f, "r") as fd:
                 fs.append(FoundryFolder(**json.load(fd)))
         js = []
         for f in journal_entry_paths:
+            print(f"Reading journal entry {f}")
             with open(f, "r") as fd:
                 orgpath = f.replace(".journalentry.foundrysync", "")
                 with open(orgpath, "r") as fd2:
@@ -236,21 +234,8 @@ class LocalStorage:
                         "html",
                         format="org",
                     )
-                    print(f"Content: {content}")
                     entry = json.load(fd)
                     entry["content"] = content
                     js.append(FoundryJournalEntry(**entry))
+        print(f"Read {len(fs)} folders and {len(js)} journal entries.")
         return LocalStorage(root_dir, fs, js)
-
-
-if __name__ == "__main__":
-    f = Foundry(url=sys.argv[1])
-    # folders, notes = asyncio.run(f.download_notes())
-    # storage = LocalStorage(
-    #     root_directory="./tmp", folders=folders, journalentries=notes
-    # )
-    # storage.write_all()
-    from_local = LocalStorage.read_all("./tmp")
-    dragon_entry = [je for je in from_local.journalentries if je.name == "Dragons"][0]
-    print(dragon_entry)
-    asyncio.run(f.safe_note(dragon_entry))
