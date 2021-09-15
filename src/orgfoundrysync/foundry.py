@@ -214,13 +214,11 @@ class LocalStorage:
                 contentpath = f.replace(".journalentry.foundrysync", "")
                 with open(contentpath, "r") as fd2:
                     c = fd2.read()
-                    if format == "org":
+                    if source_format == "org":
                         # Must wrap the @JournalEntry in = signs for code formatting.
                         # Otherwise it will be handled as a ref.
-                        c = (
-                            re.sub(
-                                "(?P<entry>@JournalEntry\[.*\]{.*})", "=\g<entry>=", c
-                            ),
+                        c = re.sub(
+                            "(?P<entry>@JournalEntry\[.*\]{.*})", "=\g<entry>=", c
                         )
                     content = pypandoc.convert_text(
                         c,
