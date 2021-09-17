@@ -218,7 +218,14 @@ class LocalStorage:
                         # Must wrap the @JournalEntry in = signs for code formatting.
                         # Otherwise it will be handled as a ref.
                         c = re.sub(
-                            "(?P<entry>@JournalEntry\[.*\]{.*})", "=\g<entry>=", c
+                            r"=(?P<entry>@JournalEntry\[.*\]{.*})=",
+                            r"\g<entry>",
+                            c,
+                        )
+                        c = re.sub(
+                            r"(?P<entry>@JournalEntry\[.*\]{.*})",
+                            r"=\g<entry>=",
+                            c,
                         )
                     content = pypandoc.convert_text(
                         c,
