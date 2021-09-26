@@ -1,16 +1,18 @@
 #!/usr/bin/env python3
 
-import asyncio
 import dataclasses
 import glob
 import json
+import logging
 import re
 import os
-import sys
 from typing import Any, Dict, Optional, List, Union, Tuple
 
 from playwright.async_api import Browser
 import pypandoc
+
+logger = logging.getLogger("foundry")
+logger.setLevel(logging.INFO)
 
 
 @dataclasses.dataclass(frozen=True, eq=True)
@@ -86,11 +88,12 @@ class Foundry:
             raise RuntimeError("Can not login to FoundryVTT without a password.")
         self.user = user
         self.browser = browser
-        self._folders = None
-        self._journal_entries = None
+        self._page = None
+        self._folders = []
+        self._journal_entries = []
 
     @property
-    def folders(self):
+    def folders(self) -> List[FoundryFolder]:
         return self._folders
 
     @folders.setter
@@ -98,30 +101,42 @@ class Foundry:
         self._folders = [FoundryFolder(**folder) for folder in folders]
 
     @property
-    def journal_entries(self):
+    def journal_entries(self) -> List[FoundryJournalEntry]:
         return self._journal_entries
 
     @journal_entries.setter
     def journal_entries(self, entries):
         self._journal_entries = [FoundryJournalEntry(**entry) for entry in entries]
 
+    def journal_entry_exists(self, entry):
+        for e in self.journal_entries:
+            if e._id == entry._id:
+                logger.info(f"Journal Entry {entry.name} already exists.")
+                return True
+        logger.info(f"Journal Entry {entry.name} does not exist yet.")
+        return False
+
     async def login(self):
-        page = await self.browser.new_page()
-        await page.goto(self.url + "/join")
-        await page.select_option("select[name=userid]", label=self.user)
-        await page.fill("input[name=password]", self.password)
-        await page.click("button[name=join]")
-        return page
+        # If the page is already set we should be logged in already
+        if self._page:
+            return self._page
+        context = await self.browser.new_context()
+        self._page = await context.new_page()
+        await self._page.goto(self.url + "/join")
+        await self._page.select_option("select[name=userid]", label=self.user)
+        await self._page.fill("input[name=password]", self.password)
+        await self._page.click("button[name=join]")
+        return self._page
 
     async def download_notes(self):
         page = await self.login()
         await page.goto(self.url + "/game", wait_until="networkidle")
         await page.wait_for_selector('a[title="Journal Entries"]')
-        print("Downloading folders")
+        logger.info("Downloading folders")
         self.folders = await page.evaluate(
             '() => { return game.folders.filter(j => j.type === "JournalEntry").map(f => f.toJSON()) }'
         )
-        print("Downloading journal entries")
+        logger.info("Downloading journal entries")
         self.journal_entries = await page.evaluate(
             "() => { return game.journal.contents.map(j => j.toJSON()) }"
         )
@@ -139,7 +154,10 @@ class Foundry:
             note_id=note._id, note_content=note.content
         )
         page = await self.login()
-        await page.goto(self.url + "/game", wait_until="networkidle")
+        if not self.journal_entries:
+            await self.download_notes()
+        self.journal_entry_exists(note)
+        await page.goto(self.url + "/game", wait_until="networkidle", timeout=60000)
         await page.wait_for_selector('a[title="Journal Entries"]')
         await page.evaluate(script)
 
@@ -197,19 +215,19 @@ class LocalStorage:
         root_dir: str,
         source_format: str,
     ):
-        print(f"Reading local data from {root_dir}")
+        logger.info(f"Reading local data from {root_dir}")
         folder_paths = glob.glob(root_dir + "/**/**.folder.foundrysync", recursive=True)
         journal_entry_paths = glob.glob(
             root_dir + "/**/**.journalentry.foundrysync", recursive=True
         )
         fs = []
         for f in folder_paths:
-            print(f"Reading folder {f}")
+            logger.info(f"Reading folder {f}")
             with open(f, "r") as fd:
                 fs.append(FoundryFolder(**json.load(fd)))
         js = []
         for f in journal_entry_paths:
-            print(f"Reading journal entry {f}")
+            logger.info(f"Reading journal entry {f}")
             with open(f, "r") as fd:
                 contentpath = f.replace(".journalentry.foundrysync", "")
                 with open(contentpath, "r") as fd2:
@@ -235,5 +253,5 @@ class LocalStorage:
                     entry = json.load(fd)
                     entry["content"] = content
                     js.append(FoundryJournalEntry(**entry))
-        print(f"Read {len(fs)} folders and {len(js)} journal entries.")
+        logger.info(f"Read {len(fs)} folders and {len(js)} journal entries.")
         return LocalStorage(root_dir, source_format, fs, js)

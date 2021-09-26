@@ -2,10 +2,15 @@
 
 import argparse
 import asyncio
+import logging
 
 from playwright.async_api import async_playwright
 
 from .foundry import Foundry, LocalStorage
+
+logging.basicConfig()
+logger = logging.getLogger("cli")
+logger.setLevel(logging.INFO)
 
 
 def validate_args(args):
@@ -67,9 +72,9 @@ async def run(args):
             browser=browser,
         )
         if args.command == "download_notes":
-            print("Downloading notes from Foundry.")
+            logger.info("Downloading notes from Foundry.")
             folders, notes = await foundry.download_notes()
-            print("Notes Downloaded")
+            logger.info("Notes Downloaded")
             storage = LocalStorage(
                 root_directory=args.root_dir,
                 format=args.target_format,
@@ -77,13 +82,13 @@ async def run(args):
                 journalentries=notes,
             )
             storage.write_all()
-            print("Notes stored")
+            logger.info("Notes stored")
         if args.command == "upload_notes":
             storage = LocalStorage.read_all(args.root_dir, args.target_format)
-            print("Uploading all notes")
+            logger.info("Uploading all notes")
             for note in storage.journalentries:
                 await foundry.upload_note(note)
-            print("Uploading finished")
+            logger.info("Uploading finished")
         if args.command == "upload_note":
             storage = LocalStorage.read_all(args.root_dir, args.target_format)
             try:
@@ -93,10 +98,11 @@ async def run(args):
                         storage.journalentries,
                     )
                 )
-                print(f"Uploading note: {note}")
+                logger.info(f"Uploading note: {note.name}")
+                logger.debug(f"Content: {note.content}")
                 await foundry.upload_note(note)
             except StopIteration:
-                print(f"Could not find the note {args.note_path} - check path")
+                logger.error(f"Could not find the note {args.note_path} - check path")
                 exit(1)
         await browser.close()
 
