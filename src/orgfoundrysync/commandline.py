@@ -86,14 +86,18 @@ async def run(args):
             print("Uploading finished")
         if args.command == "upload_note":
             storage = LocalStorage.read_all(args.root_dir, args.target_format)
-            note = next(
-                filter(
-                    lambda n: storage.fullpath(n) == args.note_path,
-                    storage.journalentries,
+            try:
+                note = next(
+                    filter(
+                        lambda n: storage.fullpath(n) == args.note_path,
+                        storage.journalentries,
+                    )
                 )
-            )
-            print(f"Uploading note: {note}")
-            await foundry.upload_note(note)
+                print(f"Uploading note: {note}")
+                await foundry.upload_note(note)
+            except StopIteration:
+                print(f"Could not find the note {args.note_path} - check path")
+                exit(1)
         await browser.close()
 
 
