@@ -4,6 +4,7 @@ import dataclasses
 import glob
 import json
 import logging
+import pathlib
 import re
 import os
 from typing import Any, Dict, Optional, List, Union, Tuple
@@ -143,20 +144,32 @@ class Foundry:
         return [self.folders, self.journal_entries]
 
     async def upload_note(self, note: FoundryJournalEntry):
-        script = """
+        update_note_script = """
         () => {{
         var note = game.journal.filter(j => j.id === "{note_id}")[0];
         var data = note.data;
         data.content = `{note_content}`;
         note.update(data)
         }}
-        """.format(
-            note_id=note._id, note_content=note.content
-        )
+        """
+        create_note_script = """
+        () => {{
+        JournalEntry.create(data = {{"name": "{note_name}", "content": `{note_content}`, "folder": "{note_folder}"}});
+        }}
+        """
         page = await self.login()
         if not self.journal_entries:
             await self.download_notes()
-        self.journal_entry_exists(note)
+        if self.journal_entry_exists(note):
+            script = update_note_script.format(
+                note_id=note._id, note_content=note.content
+            )
+        else:
+            # FIXME: After creating a new note a task should be queued to update the local storage
+            script = create_note_script.format(
+                note_name=note.name, note_content=note.content, note_folder=note.folder
+            )
+            logger.info(script)
         await page.goto(self.url + "/game", wait_until="networkidle", timeout=60000)
         await page.wait_for_selector('a[title="Journal Entries"]')
         await page.evaluate(script)
@@ -210,16 +223,43 @@ class LocalStorage:
         for n in self.journalentries:
             self.write(n)
 
-    @staticmethod
+    @classmethod
+    def load_metadata(cls, path):
+        """Load the metadata for a JournalEntry from the metadata file."""
+        with open(path, "r") as f:
+            return json.load(f)
+
+    @classmethod
+    def construct_metadata(cls, path):
+        """Construct the metadata for a JournalEntry from the path.
+
+        Needed for entries that do not yet exists in the Foundry instance and
+        have not .foundrysync file.
+
+        """
+        notepath = pathlib.Path(path)
+        folder = notepath.parent
+        folder_path = str(folder) + ".folder.foundrysync"
+        logger.info(f"Folder for {path} is {folder_path}")
+        with open(folder_path, "r") as f:
+            foldermeta = json.load(f)
+        return {
+            "_id": "",
+            "folder": foldermeta["_id"],
+            "name": notepath.name.replace(".org", ""),
+            "img": "",
+            "sort": 0,
+        }
+
+    @classmethod
     def read_all(
+        cls,
         root_dir: str,
         source_format: str,
     ):
         logger.info(f"Reading local data from {root_dir}")
         folder_paths = glob.glob(root_dir + "/**/**.folder.foundrysync", recursive=True)
-        journal_entry_paths = glob.glob(
-            root_dir + "/**/**.journalentry.foundrysync", recursive=True
-        )
+        journal_entry_paths = glob.glob(root_dir + "/**/**.org", recursive=True)
         fs = []
         for f in folder_paths:
             logger.info(f"Reading folder {f}")
@@ -229,28 +269,34 @@ class LocalStorage:
         for f in journal_entry_paths:
             logger.info(f"Reading journal entry {f}")
             with open(f, "r") as fd:
-                contentpath = f.replace(".journalentry.foundrysync", "")
-                with open(contentpath, "r") as fd2:
-                    c = fd2.read()
-                    if source_format == "org":
-                        # Must wrap the @JournalEntry in = signs for code formatting.
-                        # Otherwise it will be handled as a ref.
-                        c = re.sub(
-                            r"=(?P<entry>@(JournalEntry|Actor|Item)\[.*\]{.*})=",
-                            r"\g<entry>",
-                            c,
-                        )
-                        c = re.sub(
-                            r"(?P<entry>@(JournalEntry|Actor|Item)\[.*\]{.*})",
-                            r"=\g<entry>=",
-                            c,
-                        )
-                    content = pypandoc.convert_text(
+                c = fd.read()
+                if source_format == "org":
+                    # Must wrap the @JournalEntry in = signs for code formatting.
+                    # Otherwise it will be handled as a ref.
+                    c = re.sub(
+                        r"=(?P<entry>@(JournalEntry|Actor|Item)\[.*\]{.*})=",
+                        r"\g<entry>",
                         c,
-                        "html",
-                        format=source_format,
                     )
-                    entry = json.load(fd)
+                    c = re.sub(
+                        r"(?P<entry>@(JournalEntry|Actor|Item)\[.*\]{.*})",
+                        r"=\g<entry>=",
+                        c,
+                    )
+                content = pypandoc.convert_text(
+                    c,
+                    "html",
+                    format=source_format,
+                )
+                metadatapath = f + ".journalentry.foundrysync"
+                if os.path.exists(metadatapath):
+                    logger.info("Loading existing journal entry.")
+                    entry = cls.load_metadata(metadatapath)
+                    entry["content"] = content
+                    js.append(FoundryJournalEntry(**entry))
+                else:
+                    logger.info("Found a new journal entry.")
+                    entry = cls.construct_metadata(f)
                     entry["content"] = content
                     js.append(FoundryJournalEntry(**entry))
         logger.info(f"Read {len(fs)} folders and {len(js)} journal entries.")
