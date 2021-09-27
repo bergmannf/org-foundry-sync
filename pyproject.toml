@@ -12,6 +12,7 @@ orgfoundrysync = "orgfoundrysync.commandline:main"
 python = "^3.9"
 playwright = "^1.14.1"
 pypandoc = "^1.6.3"
+dbus-next = "^0.2.3"
 
 [tool.poetry.dev-dependencies]
 
