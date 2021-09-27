@@ -238,18 +238,23 @@ class LocalStorage:
 
         """
         notepath = pathlib.Path(path)
-        folder = notepath.parent
-        folder_path = str(folder) + ".folder.foundrysync"
-        logger.info(f"Folder for {path} is {folder_path}")
-        with open(folder_path, "r") as f:
-            foldermeta = json.load(f)
-        return {
+        note = {
             "_id": "",
-            "folder": foldermeta["_id"],
+            "folder": "",
             "name": notepath.name.replace(".org", ""),
             "img": "",
             "sort": 0,
         }
+        folder = notepath.parent
+        folder_path = str(folder) + ".folder.foundrysync"
+        logger.info(f"Folder for {path} is {folder_path}")
+        if os.path.exists(folder_path):
+            with open(folder_path, "r") as f:
+                foldermeta = json.load(f)
+                note["folder"] = foldermeta["_id"]
+        else:
+            logger.info("Note is in root directory")
+        return note
 
     @classmethod
     def read_all(
