@@ -7,7 +7,7 @@ import queue
 
 from playwright.async_api import async_playwright
 
-from .foundry import Foundry, LocalStorage
+from .foundry import Foundry, LocalStorage, NoteUploadResult
 from .dbus_service import start_server
 from . import commands
 
@@ -148,6 +148,26 @@ async def process_queue(args, queue: queue.Queue):
         )
         while task := queue.get():
             logger.info(f"Processing task {task}")
+            if isinstance(task, commands.DownloadNote):
+                logger.info("Downloading a single note from Foundry.")
+                folders, notes = await foundry.download_notes()
+                storage = LocalStorage(
+                    root_directory=args.root_dir,
+                    format=args.target_format,
+                    folders=folders,
+                    journalentries=notes,
+                )
+                try:
+                    note = next(
+                        filter(
+                            lambda n: n.name == task.name,
+                            storage.journalentries,
+                        )
+                    )
+                    storage.write(note)
+                except StopIteration:
+                    logger.error(f"Could not find the note {task.path} - check path")
+                    continue
             if isinstance(task, commands.DownloadAllNotes):
                 logger.info("Downloading notes from Foundry.")
                 folders, notes = await foundry.download_notes()
@@ -178,9 +198,12 @@ async def process_queue(args, queue: queue.Queue):
                     )
                     logger.info(f"Uploading note: {note.name}")
                     logger.debug(f"Content: {note.content}")
-                    await foundry.upload_note(note)
+                    result = await foundry.upload_note(note)
+                    if result == NoteUploadResult.NoteCreated:
+                        queue.put(commands.DownloadNote(note.name))
                 except StopIteration:
                     logger.error(f"Could not find the note {task.path} - check path")
+                    continue
             if isinstance(task, commands.Quit):
                 logger.info("Exiting loop.")
                 break

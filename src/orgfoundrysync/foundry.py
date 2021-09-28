@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import dataclasses
+from enum import Enum
 import glob
 import json
 import logging
@@ -47,6 +48,11 @@ class FoundryFolder:
             return self.name
         parent_folder = [f for f in folders if f._id == self.parent][0]
         return "/".join([parent_folder.path(folders), self.name])
+
+
+class NoteUploadResult(Enum):
+    NoteCreated = 0
+    NoteUpdated = 1
 
 
 @dataclasses.dataclass(frozen=True, eq=True)
@@ -143,7 +149,7 @@ class Foundry:
         )
         return [self.folders, self.journal_entries]
 
-    async def upload_note(self, note: FoundryJournalEntry):
+    async def upload_note(self, note: FoundryJournalEntry) -> NoteUploadResult:
         update_note_script = """
         () => {{
         var note = game.journal.filter(j => j.id === "{note_id}")[0];
@@ -164,15 +170,18 @@ class Foundry:
             script = update_note_script.format(
                 note_id=note._id, note_content=note.content
             )
+            result = NoteUploadResult.NoteUpdated
         else:
             # FIXME: After creating a new note a task should be queued to update the local storage
             script = create_note_script.format(
                 note_name=note.name, note_content=note.content, note_folder=note.folder
             )
             logger.info(script)
+            result = NoteUploadResult.NoteCreated
         await page.goto(self.url + "/game", wait_until="networkidle", timeout=60000)
         await page.wait_for_selector('a[title="Journal Entries"]')
         await page.evaluate(script)
+        return result
 
 
 class LocalStorage:
