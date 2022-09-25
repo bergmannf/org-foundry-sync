@@ -23,10 +23,12 @@ class FoundryFolder:
     name: str
     type: str = "JournalEntry"
     description: Optional[str] = ""
+    folder: Optional[str] = ""
     parent: Optional[str] = None
     sorting: Optional[str] = "a"
     sort: Optional[int] = 0
     color: Optional[str] = None
+    _stats: Optional[Dict] = dataclasses.field(default_factory=dict, hash=False)
     flags: Dict[Any, Any] = dataclasses.field(default_factory=dict, hash=False)
 
     def read_metadata(self, root_path: str, folders: List):
@@ -55,16 +57,61 @@ class NoteUploadResult(Enum):
     NoteUpdated = 1
 
 
+#  'pages': [{'_id': 'vkgd04b9gIaokMrz',
+#             'flags': {},
+#             'image': {'caption': None},
+#             'name': 'Grondir',
+#             'ownership': {'default': -1},
+#             'sort': 0,
+#             'src': None,
+#             'system': {},
+#             'text': {'content': '<h1>History</h1>\n'
+#                                 '<p>Once a beautiful port town, the city has '
+#                                 'been washed away by the '
+#                                 '@JournalEntry[Xs3hP2jC0Y2aADE8]{Cataclysm}.</p>\n'
+#                                 '<p>Most of the city is now sunken deep into '
+#                                 'the bubbling muck that makes up the bay and '
+#                                 'is hard to access.</p>\n'
+#                                 '<p>If stories can be trusted, corpse eaters '
+#                                 'and worse have made a home out of it '
+#                                 'nowadays.</p>',
+#                      'format': 1,
+#                      'markdown': None},
+#             'title': {'level': 1, 'show': False},
+#             'type': 'text',
+#             'video': {'autoplay': None,
+#                       'controls': True,
+#                       'height': None,
+#                       'loop': None,
+#                       'timestamp': None,
+#                       'volume': 0.5,
+#                       'width': None}}],
+@dataclasses.dataclass(frozen=True, eq=True):
+class FoundryJournalEntryPage:
+    _id: str
+    flags: Dict[Any, Any] = dataclasses.field(default_factory=dict, hash=False)
+    image: Dict[Any, Any] = dataclasses.field(default_factory=dict, hash=False)
+    name: str
+    ownership: Dict[Any, Any] = dataclasses.field(default_factory=dict, hash=False)
+    sort: int
+    src: Optional[str]
+    system: Dict[Any, Any] = dataclasses.field(default_factory=dict, hash=False)
+    text: Dict[Any, Any] = dataclasses.field(default_factory=dict, hash=False)
+    title: Dict[Any, Any] = dataclasses.field(default_factory=dict, hash=False)
+    type: str
+    video: Dict[Any, Any] = dataclasses.field(default_factory=dict, hash=False)
+
+
 @dataclasses.dataclass(frozen=True, eq=True)
 class FoundryJournalEntry:
     _id: str
-    name: str
-    content: str
-    img: Optional[str]
-    folder: Optional[str]
-    sort: int
-    permission: Dict[Any, Any] = dataclasses.field(default_factory=dict, hash=False)
+    _stats: Dict[Any, Any] = dataclasses.field(default_factory=dict, hash=False)
     flags: Dict[Any, Any] = dataclasses.field(default_factory=dict, hash=False)
+    folder: Optional[str]
+    name: str
+    ownership: Dict[Any, Any] = dataclasses.field(default_factory=dict, hash=False)
+    pages: List[FoundryJournalEntryPage]
+    sort: int
 
     def parent(self, folders: List) -> FoundryFolder:
         if not self.folder:
@@ -113,6 +160,7 @@ class Foundry:
 
     @journal_entries.setter
     def journal_entries(self, entries):
+        import pdb; pdb.set_trace()
         self._journal_entries = [FoundryJournalEntry(**entry) for entry in entries]
 
     def journal_entry_exists(self, entry):
@@ -138,7 +186,7 @@ class Foundry:
     async def download_notes(self):
         page = await self.login()
         await page.goto(self.url + "/game", wait_until="networkidle")
-        await page.wait_for_selector('a[title="Journal Entries"]')
+        await page.wait_for_selector('a[data-tooltip="DOCUMENT.JournalEntries"]')
         logger.info("Downloading folders")
         self.folders = await page.evaluate(
             '() => { return game.folders.filter(j => j.type === "JournalEntry").map(f => f.toJSON()) }'
