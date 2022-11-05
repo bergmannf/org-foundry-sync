@@ -17,19 +17,26 @@ logger = logging.getLogger("foundry")
 logger.setLevel(logging.INFO)
 
 
+class NoteUploadResult(Enum):
+    NoteCreated = 0
+    NoteUpdated = 1
+
+
 @dataclasses.dataclass(frozen=True, eq=True)
 class FoundryFolder:
+    """Represents a folder in the VTT."""
+
     _id: str
     name: str
-    type: str = "JournalEntry"
+    _stats: Optional[Dict] = dataclasses.field(default_factory=dict, hash=False)
+    color: Optional[str] = None
     description: Optional[str] = ""
+    flags: Dict[Any, Any] = dataclasses.field(default_factory=dict, hash=False)
     folder: Optional[str] = ""
     parent: Optional[str] = None
-    sorting: Optional[str] = "a"
     sort: Optional[int] = 0
-    color: Optional[str] = None
-    _stats: Optional[Dict] = dataclasses.field(default_factory=dict, hash=False)
-    flags: Dict[Any, Any] = dataclasses.field(default_factory=dict, hash=False)
+    sorting: Optional[str] = ""
+    type: str = "JournalEntry"
 
     def read_metadata(self, root_path: str, folders: List):
         path = "/".join([root_path, self.path(folders), ".orgfoundrysync"])
@@ -45,73 +52,49 @@ class FoundryFolder:
         with open(path, "w") as metadata:
             metadata.write(json.dumps(data))
 
-    def path(self, folders: List):
-        if self.parent == None:
+    def path(self, containers: List):
+        if self.parent is None:
             return self.name
-        parent_folder = [f for f in folders if f._id == self.parent][0]
-        return "/".join([parent_folder.path(folders), self.name])
+        parent_folder = [f for f in containers if f._id == self.parent][0]
+        return "/".join([parent_folder.path(containers), self.name])
 
 
-class NoteUploadResult(Enum):
-    NoteCreated = 0
-    NoteUpdated = 1
-
-
-#  'pages': [{'_id': 'vkgd04b9gIaokMrz',
-#             'flags': {},
-#             'image': {'caption': None},
-#             'name': 'Grondir',
-#             'ownership': {'default': -1},
-#             'sort': 0,
-#             'src': None,
-#             'system': {},
-#             'text': {'content': '<h1>History</h1>\n'
-#                                 '<p>Once a beautiful port town, the city has '
-#                                 'been washed away by the '
-#                                 '@JournalEntry[Xs3hP2jC0Y2aADE8]{Cataclysm}.</p>\n'
-#                                 '<p>Most of the city is now sunken deep into '
-#                                 'the bubbling muck that makes up the bay and '
-#                                 'is hard to access.</p>\n'
-#                                 '<p>If stories can be trusted, corpse eaters '
-#                                 'and worse have made a home out of it '
-#                                 'nowadays.</p>',
-#                      'format': 1,
-#                      'markdown': None},
-#             'title': {'level': 1, 'show': False},
-#             'type': 'text',
-#             'video': {'autoplay': None,
-#                       'controls': True,
-#                       'height': None,
-#                       'loop': None,
-#                       'timestamp': None,
-#                       'volume': 0.5,
-#                       'width': None}}],
-@dataclasses.dataclass(frozen=True, eq=True):
+@dataclasses.dataclass(frozen=True, eq=True)
 class FoundryJournalEntryPage:
     _id: str
-    flags: Dict[Any, Any] = dataclasses.field(default_factory=dict, hash=False)
-    image: Dict[Any, Any] = dataclasses.field(default_factory=dict, hash=False)
     name: str
-    ownership: Dict[Any, Any] = dataclasses.field(default_factory=dict, hash=False)
     sort: int
     src: Optional[str]
+    type: str
+    flags: Dict[Any, Any] = dataclasses.field(default_factory=dict, hash=False)
+    image: Dict[Any, Any] = dataclasses.field(default_factory=dict, hash=False)
+    ownership: Dict[Any, Any] = dataclasses.field(default_factory=dict, hash=False)
     system: Dict[Any, Any] = dataclasses.field(default_factory=dict, hash=False)
     text: Dict[Any, Any] = dataclasses.field(default_factory=dict, hash=False)
     title: Dict[Any, Any] = dataclasses.field(default_factory=dict, hash=False)
-    type: str
     video: Dict[Any, Any] = dataclasses.field(default_factory=dict, hash=False)
+
+    def read_metadata(self, root_path: str, folders: List):
+        path = "/".join(
+            [root_path, self.parent(folders).path(folders), ".orgfoundrysync"]
+        )
+        with open(path) as metadata:
+            return json.load(metadata)
+
+    def path(self, format: str):
+        return "/".join([self.name + "." + format])
 
 
 @dataclasses.dataclass(frozen=True, eq=True)
 class FoundryJournalEntry:
     _id: str
-    _stats: Dict[Any, Any] = dataclasses.field(default_factory=dict, hash=False)
-    flags: Dict[Any, Any] = dataclasses.field(default_factory=dict, hash=False)
     folder: Optional[str]
     name: str
-    ownership: Dict[Any, Any] = dataclasses.field(default_factory=dict, hash=False)
     pages: List[FoundryJournalEntryPage]
     sort: int
+    _stats: Dict[Any, Any] = dataclasses.field(default_factory=dict, hash=False)
+    flags: Dict[Any, Any] = dataclasses.field(default_factory=dict, hash=False)
+    ownership: Dict[Any, Any] = dataclasses.field(default_factory=dict, hash=False)
 
     def parent(self, folders: List) -> FoundryFolder:
         if not self.folder:
@@ -126,12 +109,12 @@ class FoundryJournalEntry:
         with open(path) as metadata:
             return json.load(metadata)
 
-    def path(self, folders: List, format: str):
+    def path(self, containers: List):
         if self.folder:
-            path = self.parent(folders).path(folders)
+            path = self.parent(containers).path(containers)
         else:
             path = ""
-        return "/".join([path, self.name + "." + format])
+        return "/".join([path, self.name])
 
 
 class Foundry:
@@ -160,8 +143,14 @@ class Foundry:
 
     @journal_entries.setter
     def journal_entries(self, entries):
-        import pdb; pdb.set_trace()
-        self._journal_entries = [FoundryJournalEntry(**entry) for entry in entries]
+        _entries = []
+        for entry in entries:
+            journal_pages = [FoundryJournalEntryPage(**page) for page in
+                             entry["pages"]]
+            entry["pages"] = journal_pages
+            journal_entry = FoundryJournalEntry(**entry)
+            _entries.append(journal_entry)
+        self._journal_entries = _entries
 
     def journal_entry_exists(self, entry):
         for e in self.journal_entries:
@@ -197,18 +186,36 @@ class Foundry:
         )
         return [self.folders, self.journal_entries]
 
-    async def upload_note(self, note: FoundryJournalEntry) -> NoteUploadResult:
+    async def upload_note(self, note: FoundryJournalEntry, pages: List[FoundryJournalEntryPage]) -> NoteUploadResult:
         update_note_script = """
         () => {{
         var note = game.journal.filter(j => j.id === "{note_id}")[0];
-        var data = note.data;
-        data.content = `{note_content}`;
-        note.update(data)
+        const page = note.pages.find(p => p.type === "text" && p.name === "{page_name}");
+        if page {
+            page.update({content: "{page_content}"});
+        } else {
+            note.createEmbeddedDocuments("JournalEntryPage", [{
+            name: "{page_name}",
+            type: "text",
+            text: {
+                content: "{page_content}",
+                format: CONST.JOURNAL_ENTRY_PAGE_FORMATS.HTML
+            }
+            }]);
+        }
         }}
         """
         create_note_script = """
         () => {{
-        JournalEntry.create(data = {{"name": "{note_name}", "content": `{note_content}`, "folder": "{note_folder}"}});
+        let entry = JournalEntry.create(data = {{"name": "{note_name}", folder": "{note_folder}"}});
+        entry.createEmbeddedDocuments("JournalEntryPage", [{
+        name: "{note_name}",
+        type: "text",
+        text: {
+            content: "{note_content}",
+            format: CONST.JOURNAL_ENTRY_PAGE_FORMATS.HTML
+        }
+        }]);
         }}
         """
         page = await self.login()
@@ -234,44 +241,46 @@ class Foundry:
 
 class LocalStorage:
     def __init__(
-        self,
-        root_directory: str,
-        format: str,
-        folders: List[FoundryFolder],
-        journalentries: List[FoundryJournalEntry],
+            self,
+            root_directory: str,
+            format: str,
+            folders: List[FoundryFolder],
+            journalentries: List[FoundryJournalEntry],
     ):
         self.root_directory = root_directory
         self.format = format
         self.folders = folders
         self.journalentries = journalentries
+        self.containers = self.folders + self.journalentries
 
-    def write_metadata(self, f: Union[FoundryFolder, FoundryJournalEntry]):
+    def write_metadata(self, f: Union[FoundryFolder, FoundryJournalEntry,
+                                      FoundryJournalEntryPage],
+                       metadatapath: str):
         obj = dataclasses.asdict(f)
-        if isinstance(f, FoundryFolder):
-            path = ".".join([self.fullpath(f), "folder", "foundrysync"])
-        elif isinstance(f, FoundryJournalEntry):
-            path = ".".join([self.fullpath(f), "journalentry", "foundrysync"])
-        else:
-            raise RuntimeError(f"Can not handle type {type(f)}.")
-        with open(path, "w") as fd:
+        with open(metadatapath, "w") as fd:
             fd.write(json.dumps(obj))
 
     def fullpath(self, f: Union[FoundryFolder, FoundryJournalEntry]):
-        if isinstance(f, FoundryFolder):
-            return "/".join([self.root_directory, f.path(self.folders)])
-        if isinstance(f, FoundryJournalEntry):
-            return "/".join([self.root_directory, f.path(self.folders, self.format)])
+        return "/".join([self.root_directory, f.path(self.containers)])
 
-    def write(self, f: Union[FoundryFolder, FoundryJournalEntry]):
+    def write(self, f: Union[FoundryFolder, FoundryJournalEntry,
+                             FoundryJournalEntryPage],
+              fullpath: str = ""):
         """Write a single FoundryObject to the fileysstem."""
-        fullpath = self.fullpath(f)
+        if not fullpath:
+            fullpath = self.fullpath(f)
         # TODO: Extract into polymorphism
         if isinstance(f, FoundryFolder):
             os.makedirs(fullpath, exist_ok=True)
+            metadatapath = ".".join([fullpath, "folder", "foundrysync"])
         elif isinstance(f, FoundryJournalEntry):
+            os.makedirs(fullpath, exist_ok=True)
+            metadatapath = ".".join([fullpath, "journalentry", "foundrysync"])
+        elif isinstance(f, FoundryJournalEntryPage):
             with open(fullpath, "w") as fd:
-                fd.write(pypandoc.convert_text(f.content, self.format, format="html"))
-        self.write_metadata(f)
+                fd.write(pypandoc.convert_text(f.text["content"], self.format, format="html"))
+                metadatapath = ".".join([fullpath, "journalentrypage", "foundrysync"])
+        self.write_metadata(f, metadatapath)
 
     def write_all(self):
         """Write all FoundryObjects to the filesystem."""
@@ -279,6 +288,9 @@ class LocalStorage:
             self.write(f)
         for n in self.journalentries:
             self.write(n)
+            fullpath = self.fullpath(n)
+            for p in n.pages:
+                self.write(p, "/".join([fullpath, p.path(self.format)]))
 
     @classmethod
     def load_metadata(cls, path):
@@ -321,45 +333,54 @@ class LocalStorage:
     ):
         logger.info(f"Reading local data from {root_dir}")
         folder_paths = glob.glob(root_dir + "/**/**.folder.foundrysync", recursive=True)
-        journal_entry_paths = glob.glob(root_dir + "/**/**.org", recursive=True)
+        journal_notes_paths = glob.glob(root_dir + "/**/**.journalentry.foundrysync", recursive=True)
         fs = []
         for f in folder_paths:
             logger.info(f"Reading folder {f}")
             with open(f, "r") as fd:
                 fs.append(FoundryFolder(**json.load(fd)))
         js = []
-        for f in journal_entry_paths:
-            logger.info(f"Reading journal entry {f}")
+        for f in journal_notes_paths:
+            logger.info(f"Reading journal page {f}")
+            page_paths = glob.glob(f + "/**.journalentrypage.foundrysync", recursive=True)
+            pages = []
             with open(f, "r") as fd:
                 c = fd.read()
-                if source_format == "org":
-                    # Must wrap the @JournalEntry in = signs for code formatting.
-                    # Otherwise it will be handled as a ref.
-                    c = re.sub(
-                        r"=(?P<entry>@(JournalEntry|Actor|Item)\[.*\]{.*})=",
-                        r"\g<entry>",
-                        c,
-                    )
-                    c = re.sub(
-                        r"(?P<entry>@(JournalEntry|Actor|Item)\[.*\]{.*})",
-                        r"=\g<entry>=",
-                        c,
-                    )
-                content = pypandoc.convert_text(
-                    c,
-                    "html",
-                    format=source_format,
-                )
+                for p in page_paths:
+                    with open(p, "r") as pd:
+                        c = pd.read()
+                        if source_format == "org":
+                            # Must wrap the @JournalEntry in = signs for code formatting.
+                            # Otherwise it will be handled as a ref.
+                            c = re.sub(
+                                r"=(?P<entry>@(JournalEntry|Actor|Item)\[.*\]{.*})=",
+                                r"\g<entry>",
+                                c,
+                            )
+                            c = re.sub(
+                                r"(?P<entry>@(JournalEntry|Actor|Item)\[.*\]{.*})",
+                                r"=\g<entry>=",
+                                c,
+                            )
+                        content = pypandoc.convert_text(
+                            c,
+                            "html",
+                            format=source_format,
+                        )
+                        metadatapath = p + ".journalentrypage.foundrysync"
+                        page = cls.load_metadata(metadatapath)
+                        page.text["content"] = content
+                        pages.append(FoundryJournalEntryPage(**page))
                 metadatapath = f + ".journalentry.foundrysync"
                 if os.path.exists(metadatapath):
                     logger.info("Loading existing journal entry.")
                     entry = cls.load_metadata(metadatapath)
-                    entry["content"] = content
+                    js.pages = pages
                     js.append(FoundryJournalEntry(**entry))
                 else:
                     logger.info("Found a new journal entry.")
                     entry = cls.construct_metadata(f)
-                    entry["content"] = content
+                    js.pages = pages
                     js.append(FoundryJournalEntry(**entry))
         logger.info(f"Read {len(fs)} folders and {len(js)} journal entries.")
         return LocalStorage(root_dir, source_format, fs, js)

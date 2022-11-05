@@ -211,7 +211,7 @@ async def process_queue(args, queue: queue.Queue):
 
 
 async def run(args, queue: queue.Queue):
-    dbus = await start_server(queue)
+    await start_server(queue)
     loop = asyncio.get_event_loop()
     tasks = []
     if not hasattr(args, "command"):
