@@ -8,7 +8,7 @@ import logging
 import pathlib
 import re
 import os
-from typing import Any, Dict, Optional, List, Union, Tuple
+from typing import Any, Dict, Optional, List, Union, Self, TypeAlias
 
 from playwright.async_api import Browser
 import pypandoc
@@ -25,7 +25,6 @@ class NoteUploadResult(Enum):
 @dataclasses.dataclass(frozen=True, eq=True)
 class FoundryFolder:
     """Represents a folder in the VTT."""
-
     _id: str
     name: str
     _stats: Optional[Dict] = dataclasses.field(default_factory=dict, hash=False)
@@ -38,25 +37,8 @@ class FoundryFolder:
     sorting: Optional[str] = ""
     type: str = "JournalEntry"
 
-    def read_metadata(self, root_path: str, folders: List):
-        path = "/".join([root_path, self.path(folders), ".orgfoundrysync"])
-        if not os.path.exists(path):
-            return {}
-        with open(path) as metadata:
-            return json.load(metadata)
-
-    def write_metadata(self, root_path: str, folders: List):
-        path = "/".join([root_path, self.path(folders), ".orgfoundrysync"])
-        data = self.read_metadata(root_path, folders)
-        data[self.path(folders)] = self._id
-        with open(path, "w") as metadata:
-            metadata.write(json.dumps(data))
-
-    def path(self, containers: List):
-        if self.parent is None:
-            return self.name
-        parent_folder = [f for f in containers if f._id == self.parent][0]
-        return "/".join([parent_folder.path(containers), self.name])
+    def get_parent(self):
+        return self.parent
 
 
 @dataclasses.dataclass(frozen=True, eq=True)
@@ -74,15 +56,8 @@ class FoundryJournalEntryPage:
     title: Dict[Any, Any] = dataclasses.field(default_factory=dict, hash=False)
     video: Dict[Any, Any] = dataclasses.field(default_factory=dict, hash=False)
 
-    def read_metadata(self, root_path: str, folders: List):
-        path = "/".join(
-            [root_path, self.parent(folders).path(folders), ".orgfoundrysync"]
-        )
-        with open(path) as metadata:
-            return json.load(metadata)
-
-    def path(self, format: str):
-        return "/".join([self.name + "." + format])
+    def get_parent(self):
+        return self.folder
 
 
 @dataclasses.dataclass(frozen=True, eq=True)
@@ -96,25 +71,8 @@ class FoundryJournalEntry:
     flags: Dict[Any, Any] = dataclasses.field(default_factory=dict, hash=False)
     ownership: Dict[Any, Any] = dataclasses.field(default_factory=dict, hash=False)
 
-    def parent(self, folders: List) -> FoundryFolder:
-        if not self.folder:
-            return None
-        else:
-            return [f for f in folders if f._id == self.folder][0]
-
-    def read_metadata(self, root_path: str, folders: List):
-        path = "/".join(
-            [root_path, self.parent(folders).path(folders), ".orgfoundrysync"]
-        )
-        with open(path) as metadata:
-            return json.load(metadata)
-
-    def path(self, containers: List):
-        if self.folder:
-            path = self.parent(containers).path(containers)
-        else:
-            path = ""
-        return "/".join([path, self.name])
+    def get_parent(self):
+        return self.folder
 
 
 class Foundry:
@@ -239,10 +197,13 @@ class Foundry:
         return result
 
 
+FoundryTypes: TypeAlias = Union[FoundryFolder, FoundryJournalEntry,
+                                FoundryJournalEntryPage]
+
 class LocalStorage:
     def __init__(
             self,
-            root_directory: str,
+            root_directory: pathlib.Path,
             format: str,
             folders: List[FoundryFolder],
             journalentries: List[FoundryJournalEntry],
@@ -253,33 +214,48 @@ class LocalStorage:
         self.journalentries = journalentries
         self.containers = self.folders + self.journalentries
 
-    def write_metadata(self, f: Union[FoundryFolder, FoundryJournalEntry,
-                                      FoundryJournalEntryPage],
-                       metadatapath: str):
+    def read_metadata(self, f: FoundryTypes):
+        path = root_path / self.path(folders).with_suffix(".orgfoundrysync")
+        if not os.path.exists(path):
+            return {}
+        with open(path) as metadata:
+            return json.load(metadata)
+
+    def write_metadata(self, f: FoundryTypes, metadatapath: str):
         obj = dataclasses.asdict(f)
         with open(metadatapath, "w") as fd:
             fd.write(json.dumps(obj))
 
+    def path(self, f: FoundryTypes):
+        parents = [f]
+        tmp = f
+        while tmp.get_parent():
+            p = [p for p in self.folders if p._id == tmp.get_parent()][0]
+            parents.insert(0, p)
+            tmp = p
+        parents = [pathlib.Path(p.name) for p in parents]
+        return pathlib.PurePath(*parents)
+
     def fullpath(self, f: Union[FoundryFolder, FoundryJournalEntry]):
-        return "/".join([self.root_directory, f.path(self.containers)])
+        return self.root_directory / self.path(f)
 
     def write(self, f: Union[FoundryFolder, FoundryJournalEntry,
                              FoundryJournalEntryPage],
-              fullpath: str = ""):
+              fullpath: pathlib.Path = None):
         """Write a single FoundryObject to the fileysstem."""
         if not fullpath:
             fullpath = self.fullpath(f)
         # TODO: Extract into polymorphism
         if isinstance(f, FoundryFolder):
             os.makedirs(fullpath, exist_ok=True)
-            metadatapath = ".".join([fullpath, "folder", "foundrysync"])
+            metadatapath = fullpath.with_suffix(".folder.foundrysync")
         elif isinstance(f, FoundryJournalEntry):
             os.makedirs(fullpath, exist_ok=True)
-            metadatapath = ".".join([fullpath, "journalentry", "foundrysync"])
+            metadatapath = fullpath.with_suffix(".journalentry.foundrysync")
         elif isinstance(f, FoundryJournalEntryPage):
             with open(fullpath, "w") as fd:
                 fd.write(pypandoc.convert_text(f.text["content"], self.format, format="html"))
-                metadatapath = ".".join([fullpath, "journalentrypage", "foundrysync"])
+                metadatapath = fullpath.with_suffix(".journalentrypage.foundrysync")
         self.write_metadata(f, metadatapath)
 
     def write_all(self):
@@ -315,7 +291,7 @@ class LocalStorage:
             "sort": 0,
         }
         folder = notepath.parent
-        folder_path = str(folder) + ".folder.foundrysync"
+        folder_path = str(folder.with_suffix(".folder.foundrysync"))
         logger.info(f"Folder for {path} is {folder_path}")
         if os.path.exists(folder_path):
             with open(folder_path, "r") as f:
@@ -328,12 +304,16 @@ class LocalStorage:
     @classmethod
     def read_all(
         cls,
-        root_dir: str,
+        root_dir: pathlib.Path,
         source_format: str,
-    ):
+    ) -> Self:
         logger.info(f"Reading local data from {root_dir}")
-        folder_paths = glob.glob(root_dir + "/**/**.folder.foundrysync", recursive=True)
-        journal_notes_paths = glob.glob(root_dir + "/**/**.journalentry.foundrysync", recursive=True)
+        folder_paths = glob.glob(str(root_dir / "**/**.folder.foundrysync"),
+                                 recursive=True)
+        journal_notes_paths = glob.glob(str(root_dir / "**/**.journalentry.foundrysync"),
+                                        recursive=True)
+        pages = glob.glob(str(root_dir / f"**/**.{source_format}"),
+                              recursive=True)
         fs = []
         for f in folder_paths:
             logger.info(f"Reading folder {f}")
@@ -342,7 +322,7 @@ class LocalStorage:
         js = []
         for f in journal_notes_paths:
             logger.info(f"Reading journal page {f}")
-            page_paths = glob.glob(f + "/**.journalentrypage.foundrysync", recursive=True)
+            page_paths = glob.glob(str(f / "/**.journalentrypage.foundrysync"), recursive=True)
             pages = []
             with open(f, "r") as fd:
                 c = fd.read()
