@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
+import dataclasses
 import pathlib
-from orgfoundrysync.foundry import LocalStorage, FoundryFolder
+import json
+from orgfoundrysync.foundry import LocalStorage, FoundryFolder, MetadataStorage
 
 
 def test_relative_path():
@@ -29,3 +31,12 @@ def test_load_folder(tmp_path: pathlib.Path):
 
     storage = LocalStorage.read_all(root_dir, "org")
     assert len(storage.folders) == 1
+
+
+def test_writing_metadata(tmp_path: pathlib.Path):
+    metadata = MetadataStorage(root_directory=tmp_path)
+    f1 = FoundryFolder(_id="1", name="root")
+    metadata.write(f1)
+    data = metadata.read(f1)
+    obj = dataclasses.asdict(f1)
+    assert data == obj

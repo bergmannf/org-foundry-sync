@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 
+from contextlib import closing
 import dataclasses
+import sqlite3
 from enum import Enum
 import glob
 import json
@@ -47,7 +49,7 @@ class FoundryJournalEntryPage:
     name: str
     sort: int
     src: Optional[str]
-    type: str
+    type: str = "JournalEntryPage"
     flags: Dict[Any, Any] = dataclasses.field(default_factory=dict, hash=False)
     image: Dict[Any, Any] = dataclasses.field(default_factory=dict, hash=False)
     ownership: Dict[Any, Any] = dataclasses.field(default_factory=dict, hash=False)
@@ -70,6 +72,7 @@ class FoundryJournalEntry:
     _stats: Dict[Any, Any] = dataclasses.field(default_factory=dict, hash=False)
     flags: Dict[Any, Any] = dataclasses.field(default_factory=dict, hash=False)
     ownership: Dict[Any, Any] = dataclasses.field(default_factory=dict, hash=False)
+    type: str = "JournalEntry"
 
     def get_parent(self):
         return self.folder
@@ -200,31 +203,65 @@ class Foundry:
 FoundryTypes: TypeAlias = Union[FoundryFolder, FoundryJournalEntry,
                                 FoundryJournalEntryPage]
 
+class MetadataStorage:
+    def __init__(self, root_directory: pathlib.Path,
+                 dbname: str = "orgfoundrysync-metadata.db"):
+        self.root_directory = root_directory
+        self.dbname = dbname
+        self.dbpath = self.root_directory / self.dbname
+        self.init_database()
+
+    def init_database(self):
+        with closing(sqlite3.connect(self.dbpath)) as connection:
+            with connection:
+                connection.execute("CREATE TABLE IF NOT EXISTS foundrymetadata (name varchar(32), type varchar(64), data json)")
+
+    def read(self, f: FoundryTypes) -> dict[Any, Any]:
+        with closing(sqlite3.connect(self.dbpath)) as connection:
+            with connection:
+                result = connection.execute(
+                    "SELECT data FROM foundrymetadata WHERE name = (?) AND type = (?)",
+                    (f.name, f.type)
+                )
+                rows = result.fetchall()
+                if len(rows) == 0:
+                    logger.info(f"Did not find any metadata for name {f.name} and type {f.type}.")
+                    raise RuntimeError("No metadata objects found")
+                elif len(rows) > 1:
+                    logger.info(f"Expected one row of metadata for name {f.name} and type {f.type}, but got {len(rows)}.")
+                    raise RuntimeError("Too many fitting metadata objects found")
+                row = rows[0]
+                return json.loads(row[0])
+
+    def write(self, f: FoundryTypes):
+        obj = dataclasses.asdict(f)
+        with closing(sqlite3.connect(self.dbpath)) as connection:
+            with connection:
+                connection.execute(
+                    "INSERT INTO foundrymetadata (name, type, data) VALUES (?, ?, ?)",
+                    (f.name, f.type, json.dumps(obj)))
+
 class LocalStorage:
     def __init__(
             self,
             root_directory: pathlib.Path,
             format: str,
-            folders: List[FoundryFolder],
-            journalentries: List[FoundryJournalEntry],
+            folders: List[FoundryFolder] = None,
+            journalentries: List[FoundryJournalEntry] = None,
     ):
         self.root_directory = root_directory
         self.format = format
         self.folders = folders
         self.journalentries = journalentries
         self.containers = self.folders + self.journalentries
+        self.metadatastorage = MetadataStorage(root_directory)
 
     def read_metadata(self, f: FoundryTypes):
-        path = root_path / self.path(folders).with_suffix(".orgfoundrysync")
-        if not os.path.exists(path):
-            return {}
-        with open(path) as metadata:
-            return json.load(metadata)
+        # TODO: read metadata based on type
+        return self.metadatastorage.read(f)
 
     def write_metadata(self, f: FoundryTypes, metadatapath: str):
-        obj = dataclasses.asdict(f)
-        with open(metadatapath, "w") as fd:
-            fd.write(json.dumps(obj))
+        self.metadatastorage.write(f)
 
     def path(self, f: FoundryTypes):
         parents = [f]
@@ -248,15 +285,12 @@ class LocalStorage:
         # TODO: Extract into polymorphism
         if isinstance(f, FoundryFolder):
             os.makedirs(fullpath, exist_ok=True)
-            metadatapath = fullpath.with_suffix(".folder.foundrysync")
         elif isinstance(f, FoundryJournalEntry):
             os.makedirs(fullpath, exist_ok=True)
-            metadatapath = fullpath.with_suffix(".journalentry.foundrysync")
         elif isinstance(f, FoundryJournalEntryPage):
             with open(fullpath, "w") as fd:
                 fd.write(pypandoc.convert_text(f.text["content"], self.format, format="html"))
-                metadatapath = fullpath.with_suffix(".journalentrypage.foundrysync")
-        self.write_metadata(f, metadatapath)
+        self.write_metadata(f)
 
     def write_all(self):
         """Write all FoundryObjects to the filesystem."""
@@ -274,8 +308,7 @@ class LocalStorage:
         with open(path, "r") as f:
             return json.load(f)
 
-    @classmethod
-    def construct_metadata(cls, path):
+    def construct_metadata(self, path):
         """Construct the metadata for a JournalEntry from the path.
 
         Needed for entries that do not yet exists in the Foundry instance and
@@ -286,18 +319,15 @@ class LocalStorage:
         note = {
             "_id": "",
             "folder": "",
-            "name": notepath.name.replace(".org", ""),
+            "name": notepath.name.replace(self.format, ""),
             "img": "",
             "sort": 0,
         }
         folder = notepath.parent
-        folder_path = str(folder.with_suffix(".folder.foundrysync"))
-        logger.info(f"Folder for {path} is {folder_path}")
-        if os.path.exists(folder_path):
-            with open(folder_path, "r") as f:
-                foldermeta = json.load(f)
-                note["folder"] = foldermeta["_id"]
-        else:
+        try:
+            foldermeta = self.read_metadata(FoundryFolder(name=folder.name))
+            note["folder"] = foldermeta["_id"]
+        except:
             logger.info("Note is in root directory")
         return note
 
@@ -307,13 +337,14 @@ class LocalStorage:
         root_dir: pathlib.Path,
         source_format: str,
     ) -> Self:
+        // TODO: Rework completely
         logger.info(f"Reading local data from {root_dir}")
         folder_paths = glob.glob(str(root_dir / "**/**.folder.foundrysync"),
                                  recursive=True)
         journal_notes_paths = glob.glob(str(root_dir / "**/**.journalentry.foundrysync"),
                                         recursive=True)
         pages = glob.glob(str(root_dir / f"**/**.{source_format}"),
-                              recursive=True)
+                          recursive=True)
         fs = []
         for f in folder_paths:
             logger.info(f"Reading folder {f}")
