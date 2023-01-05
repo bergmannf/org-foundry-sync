@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 import dataclasses
 import pathlib
-import json
 from orgfoundrysync.foundry import LocalStorage, FoundryFolder, MetadataStorage
 
 
@@ -26,10 +25,10 @@ def test_load_folder(tmp_path: pathlib.Path):
     folder.mkdir()
     entry = folder / "Entry"
     entry.mkdir()
-    page = folder / "Page.org"
+    page = entry / "Page.org"
     page.touch()
 
-    storage = LocalStorage.read_all(root_dir, "org")
+    storage = LocalStorage(root_dir, "org").read_all()
     assert len(storage.folders) == 1
 
 

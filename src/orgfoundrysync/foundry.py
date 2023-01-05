@@ -251,16 +251,19 @@ class LocalStorage:
     ):
         self.root_directory = root_directory
         self.format = format
-        self.folders = folders
-        self.journalentries = journalentries
-        self.containers = self.folders + self.journalentries
+        self.folders = folders if folders else []
+        self.journalentries = journalentries if journalentries else []
         self.metadatastorage = MetadataStorage(root_directory)
 
     def read_metadata(self, f: FoundryTypes):
         # TODO: read metadata based on type
-        return self.metadatastorage.read(f)
+        try:
+            meta = self.metadatastorage.read(f)
+            return meta
+        except RuntimeError:
+            return None
 
-    def write_metadata(self, f: FoundryTypes, metadatapath: str):
+    def write_metadata(self, f: FoundryTypes):
         self.metadatastorage.write(f)
 
     def path(self, f: FoundryTypes):
@@ -331,67 +334,78 @@ class LocalStorage:
             logger.info("Note is in root directory")
         return note
 
-    @classmethod
-    def read_all(
-        cls,
-        root_dir: pathlib.Path,
-        source_format: str,
-    ) -> Self:
-        // TODO: Rework completely
-        logger.info(f"Reading local data from {root_dir}")
-        folder_paths = glob.glob(str(root_dir / "**/**.folder.foundrysync"),
-                                 recursive=True)
-        journal_notes_paths = glob.glob(str(root_dir / "**/**.journalentry.foundrysync"),
-                                        recursive=True)
-        pages = glob.glob(str(root_dir / f"**/**.{source_format}"),
-                          recursive=True)
-        fs = []
-        for f in folder_paths:
-            logger.info(f"Reading folder {f}")
-            with open(f, "r") as fd:
-                fs.append(FoundryFolder(**json.load(fd)))
-        js = []
-        for f in journal_notes_paths:
-            logger.info(f"Reading journal page {f}")
-            page_paths = glob.glob(str(f / "/**.journalentrypage.foundrysync"), recursive=True)
-            pages = []
-            with open(f, "r") as fd:
-                c = fd.read()
-                for p in page_paths:
-                    with open(p, "r") as pd:
-                        c = pd.read()
-                        if source_format == "org":
-                            # Must wrap the @JournalEntry in = signs for code formatting.
-                            # Otherwise it will be handled as a ref.
-                            c = re.sub(
-                                r"=(?P<entry>@(JournalEntry|Actor|Item)\[.*\]{.*})=",
-                                r"\g<entry>",
-                                c,
-                            )
-                            c = re.sub(
-                                r"(?P<entry>@(JournalEntry|Actor|Item)\[.*\]{.*})",
-                                r"=\g<entry>=",
-                                c,
-                            )
-                        content = pypandoc.convert_text(
-                            c,
-                            "html",
-                            format=source_format,
-                        )
-                        metadatapath = p + ".journalentrypage.foundrysync"
-                        page = cls.load_metadata(metadatapath)
-                        page.text["content"] = content
-                        pages.append(FoundryJournalEntryPage(**page))
-                metadatapath = f + ".journalentry.foundrysync"
-                if os.path.exists(metadatapath):
-                    logger.info("Loading existing journal entry.")
-                    entry = cls.load_metadata(metadatapath)
-                    js.pages = pages
-                    js.append(FoundryJournalEntry(**entry))
+    def make_folder(self, folder: pathlib.Path):
+        id = None
+        if folder.parent != self.root_directory:
+            parent = self.read_metadata(FoundryFolder(None, folder.parent.name))
+            if parent:
+                id = parent['id']
+            else:
+                logger.error(f"Can not find parent for new folder: {folder.absolute()}")
+        return FoundryFolder(None, folder.name, folder=id)
+
+    def make_entry(self, entry: pathlib.Path):
+        id = None
+        if entry.parent != self.root_directory:
+            parent = self.read_metadata(FoundryFolder(None, entry.parent.name))
+            if parent:
+                id = parent['id']
+            else:
+                logger.error(f"Can not find parent for new entry: {entry.absolute()}")
+        return FoundryJournalEntry(None, id, entry.name, [], False)
+
+    def make_page(self, page: pathlib.Path):
+        return FoundryJournalEntryPage(None, page.name, False, None)
+
+
+    def read_all(self) -> Self:
+        folders = set()
+        entries = set()
+        for child in self.root_directory.rglob("*"):
+            logger.info(f"Loading {child.absolute()}")
+            if child.absolute() == self.metadatastorage.dbpath:
+                logger.info("Skipping database file.")
+                continue
+            if child.is_dir() and not any([c.is_file() for c in child.iterdir()]):
+                folder_metadata = self.read_metadata(FoundryFolder(None, child.name))
+                if not folder_metadata:
+                    logger.info(f"Did not find matching metadata for folder: {child.name}")
+                    folder = self.make_folder(child)
                 else:
-                    logger.info("Found a new journal entry.")
-                    entry = cls.construct_metadata(f)
-                    js.pages = pages
-                    js.append(FoundryJournalEntry(**entry))
-        logger.info(f"Read {len(fs)} folders and {len(js)} journal entries.")
-        return LocalStorage(root_dir, source_format, fs, js)
+                    folder = FoundryFolder(**folder_metadata)
+                folders.add(folder)
+            if child.is_file():
+                parent_entry_metadata = self.read_metadata(FoundryJournalEntry(None, child.parent.parent.name, child.parent.name, [], False))
+                if not parent_entry_metadata:
+                    logger.info(f"Did not find matching metadata for entry: {child.parent.name}")
+                    parent_entry = self.make_entry(child.parent)
+                else:
+                    parent_entry = FoundryJournalEntry(**parent_entry_metadata)
+                page_metadata = self.read_metadata(FoundryJournalEntryPage(None, child.name, False, ""))
+                if not page_metadata:
+                    logger.info(f"Did not find matching metadata for page: {child.name}")
+                    page = self.make_page(child)
+                else:
+                    page = FoundryJournalEntryPage(**page_metadata)
+                content = child.read_text()
+                if self.format == "org":
+                    # Must wrap the @JournalEntry in = signs for code formatting.
+                    # Otherwise it will be handled as a ref.
+                    content = re.sub(
+                        r"=(?P<entry>@(JournalEntry|Actor|Item)\[.*\]{.*})=",
+                        r"\g<entry>",
+                        content,
+                    )
+                    content = re.sub(
+                        r"(?P<entry>@(JournalEntry|Actor|Item)\[.*\]{.*})",
+                        r"=\g<entry>=",
+                        content,
+                    )
+                content = pypandoc.convert_text(
+                    content,
+                    "html",
+                    format=self.format,
+                )
+                page.text["content"] = content
+                parent_entry.pages.append(page)
+        return LocalStorage(self.root_directory, self.format, folders, entries)
