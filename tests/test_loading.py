@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 import dataclasses
 import pathlib
-from orgfoundrysync.foundry import LocalStorage, FoundryFolder, MetadataStorage
+from orgfoundrysync.foundry import Foundry, LocalStorage, FoundryFolder, MetadataStorage, FoundryJournalEntry, FoundryJournalEntryPage
 
 
 def test_relative_path():
@@ -39,3 +39,13 @@ def test_writing_metadata(tmp_path: pathlib.Path):
     data = metadata.read(f1)
     obj = dataclasses.asdict(f1)
     assert data == obj
+
+
+def test_upload_script():
+    p1 = FoundryJournalEntryPage(None, "TestPage", 0, "",
+                                 text={"content": "Test"})
+    e1 = FoundryJournalEntry(None, "1", "TestEntry", [p1], False)
+    foundry = Foundry("http://localhost", None, password="1")
+    script = foundry.create_upload_script(e1)
+    assert "JournalEntry.create" in script
+    assert "entry.createEmbeddedDocuments" in script

@@ -147,57 +147,50 @@ class Foundry:
         )
         return [self.folders, self.journal_entries]
 
-    async def upload_note(self, note: FoundryJournalEntry, pages: List[FoundryJournalEntryPage]) -> NoteUploadResult:
-        update_note_script = """
-        () => {{
-        var note = game.journal.filter(j => j.id === "{note_id}")[0];
-        const page = note.pages.find(p => p.type === "text" && p.name === "{page_name}");
-        if page {
-            page.update({content: "{page_content}"});
-        } else {
-            note.createEmbeddedDocuments("JournalEntryPage", [{
-            name: "{page_name}",
+    def create_upload_script(self, note: FoundryJournalEntry) -> str:
+        CREATE_ENTRY="""let entry = JournalEntry.create(data = {{"name": "{note.name}", "folder": "{note.folder}"}});"""
+        FIND_ENTRY="""let entry = game.journal.filter(j => j.id === "{note._id}")[0];"""
+
+        CREATE_PAGE="""
+        entry.createEmbeddedDocuments("JournalEntryPage", [{{
+            name: "{page.name}",
             type: "text",
-            text: {
-                content: "{page_content}",
+            text: {{
+                content: "{page.text[content]}",
                 format: CONST.JOURNAL_ENTRY_PAGE_FORMATS.HTML
-            }
-            }]);
-        }
-        }}
+            }}
+        }}]);
         """
-        create_note_script = """
-        () => {{
-        let entry = JournalEntry.create(data = {{"name": "{note_name}", folder": "{note_folder}"}});
-        entry.createEmbeddedDocuments("JournalEntryPage", [{
-        name: "{note_name}",
-        type: "text",
-        text: {
-            content: "{note_content}",
-            format: CONST.JOURNAL_ENTRY_PAGE_FORMATS.HTML
-        }
-        }]);
-        }}
+        UPDATE_PAGE="""
+        const page = entry.pages.find(p => p._id === "{page._id}");
+        page?.update({content: "{page.text[content]}"});
         """
+        if not note._id:
+            logger.info(f"Creating a new note for: {note.name}")
+            entry_script = CREATE_ENTRY.format(note=note)
+        else:
+            entry_script = FIND_ENTRY.format(note=note)
+        page_script = ""
+        for page in note.pages:
+            if not page._id:
+                logger.info(f"Creating a new page for: {page.name}")
+                page_script += CREATE_PAGE.format(page=page)
+            else:
+                page_script += UPDATE_PAGE.format(page=page)
+        script = f"""() => {{
+        {entry_script}
+        {page_script}
+        }}"""
+        return script
+
+    async def upload_note(self, note: FoundryJournalEntry):
+        script = self.create_upload_script(note)
         page = await self.login()
         if not self.journal_entries:
             await self.download_notes()
-        if self.journal_entry_exists(note):
-            script = update_note_script.format(
-                note_id=note._id, note_content=note.content
-            )
-            result = NoteUploadResult.NoteUpdated
-        else:
-            # FIXME: After creating a new note a task should be queued to update the local storage
-            script = create_note_script.format(
-                note_name=note.name, note_content=note.content, note_folder=note.folder
-            )
-            logger.info(script)
-            result = NoteUploadResult.NoteCreated
         await page.goto(self.url + "/game", wait_until="networkidle", timeout=60000)
         await page.wait_for_selector('a[title="Journal Entries"]')
         await page.evaluate(script)
-        return result
 
 
 FoundryTypes: TypeAlias = Union[FoundryFolder, FoundryJournalEntry,
