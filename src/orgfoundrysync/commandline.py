@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import logging
 import queue
+import pathlib
 
 from playwright.async_api import async_playwright
 
@@ -96,7 +97,7 @@ def queue_single_command(args, queue):
             queue.put(commands.UploadAllNotes())
         else:
             logger.info("Queue upload single note")
-            queue.put(commands.UploadNote(args.note_path))
+            queue.put(commands.UploadNote(pathlib.Path(args.note_path)))
     if args.command == "download_note":
         if args.all:
             logger.info("Queue download all notes")
@@ -108,7 +109,7 @@ def queue_single_command(args, queue):
 
 
 def input_loop(queue):
-    """No command was passed on the commandline.#!/usr/bin/env python
+    """No command was passed on the commandline.
 
     Interactive mode will be used."""
     logger.info("Starting input loop")
@@ -122,7 +123,7 @@ def input_loop(queue):
         if "upload_note" in task:
             try:
                 path = task.split()[1]
-                queue.put(commands.UploadNote(path))
+                queue.put(commands.UploadNote(pathlib.Path(path)))
             except:
                 print("Upload note should contain the path.")
         if "download_note" in task:
@@ -152,7 +153,7 @@ async def process_queue(args, queue: queue.Queue):
                 logger.info("Downloading a single note from Foundry.")
                 folders, notes = await foundry.download_notes()
                 storage = LocalStorage(
-                    root_directory=args.root_dir,
+                    root_directory=pathlib.Path(args.root_dir),
                     format=args.target_format,
                     folders=folders,
                     journalentries=notes,
@@ -173,7 +174,7 @@ async def process_queue(args, queue: queue.Queue):
                 folders, notes = await foundry.download_notes()
                 logger.info("Notes Downloaded")
                 storage = LocalStorage(
-                    root_directory=args.root_dir,
+                    root_directory=pathlib.Path(args.root_dir),
                     format=args.target_format,
                     folders=folders,
                     journalentries=notes,
@@ -181,14 +182,18 @@ async def process_queue(args, queue: queue.Queue):
                 storage.write_all()
                 logger.info("Notes stored")
             if isinstance(task, commands.UploadAllNotes):
-                storage = LocalStorage.read_all(args.root_dir, args.target_format)
+                storage = LocalStorage(pathlib.Path(args.root_dir),
+                                       args.target_format)
+                storage = storage.read_all()
                 logger.info("Uploading all notes")
                 for note in storage.journalentries:
                     await foundry.upload_note(note)
                 logger.info("Uploading finished")
             if isinstance(task, commands.UploadNote):
                 logger.info(f"Uploading note {task}")
-                storage = LocalStorage.read_all(args.root_dir, args.target_format)
+                storage = LocalStorage(pathlib.Path(args.root_dir),
+                                       args.target_format)
+                storage = storage.read_all()
                 try:
                     note = next(
                         filter(
@@ -197,7 +202,6 @@ async def process_queue(args, queue: queue.Queue):
                         )
                     )
                     logger.info(f"Uploading note: {note.name}")
-                    logger.debug(f"Content: {note.content}")
                     result = await foundry.upload_note(note)
                     if result == NoteUploadResult.NoteCreated:
                         queue.put(commands.DownloadNote(note.name))

@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 import dataclasses
-from typing import Optional
+import pathlib
 
 
 @dataclasses.dataclass(frozen=True, eq=True)
 class UploadNote:
-    path: str
+    path: pathlib.Path
 
 
 @dataclasses.dataclass(frozen=True, eq=True)

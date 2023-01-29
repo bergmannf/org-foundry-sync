@@ -37,7 +37,8 @@ class FoundryFolder:
     parent: Optional[str] = None
     sort: Optional[int] = 0
     sorting: Optional[str] = ""
-    type: str = "JournalEntry"
+    type: Optional[str] = ""
+    metadata_type: str = "Folder"
 
     def get_parent(self):
         return self.parent
@@ -49,17 +50,18 @@ class FoundryJournalEntryPage:
     name: str
     sort: int
     src: Optional[str]
-    type: str = "JournalEntryPage"
+    metadata_type: str = "JournalEntryPage"
     flags: Dict[Any, Any] = dataclasses.field(default_factory=dict, hash=False)
     image: Dict[Any, Any] = dataclasses.field(default_factory=dict, hash=False)
     ownership: Dict[Any, Any] = dataclasses.field(default_factory=dict, hash=False)
     system: Dict[Any, Any] = dataclasses.field(default_factory=dict, hash=False)
     text: Dict[Any, Any] = dataclasses.field(default_factory=dict, hash=False)
+    type: Optional[str] = ""
     title: Dict[Any, Any] = dataclasses.field(default_factory=dict, hash=False)
     video: Dict[Any, Any] = dataclasses.field(default_factory=dict, hash=False)
 
     def get_parent(self):
-        return self.folder
+        return None
 
 
 @dataclasses.dataclass(frozen=True, eq=True)
@@ -72,7 +74,7 @@ class FoundryJournalEntry:
     _stats: Dict[Any, Any] = dataclasses.field(default_factory=dict, hash=False)
     flags: Dict[Any, Any] = dataclasses.field(default_factory=dict, hash=False)
     ownership: Dict[Any, Any] = dataclasses.field(default_factory=dict, hash=False)
-    type: str = "JournalEntry"
+    metadata_type: str = "JournalEntry"
 
     def get_parent(self):
         return self.folder
@@ -163,7 +165,7 @@ class Foundry:
         """
         UPDATE_PAGE="""
         const page = entry.pages.find(p => p._id === "{page._id}");
-        page?.update({content: "{page.text[content]}"});
+        page?.update({{content: "{page.text[content]}"}});
         """
         if not note._id:
             logger.info(f"Creating a new note for: {note.name}")
@@ -172,6 +174,7 @@ class Foundry:
             entry_script = FIND_ENTRY.format(note=note)
         page_script = ""
         for page in note.pages:
+            import pdb; pdb.set_trace()
             if not page._id:
                 logger.info(f"Creating a new page for: {page.name}")
                 page_script += CREATE_PAGE.format(page=page)
@@ -214,25 +217,26 @@ class MetadataStorage:
             with connection:
                 result = connection.execute(
                     "SELECT data FROM foundrymetadata WHERE name = (?) AND type = (?)",
-                    (f.name, f.type)
+                    (f.name, f.metadata_type)
                 )
                 rows = result.fetchall()
                 if len(rows) == 0:
-                    logger.info(f"Did not find any metadata for name {f.name} and type {f.type}.")
+                    logger.info(f"Did not find any metadata for '{f.name}' ({f.metadata_type})")
                     raise RuntimeError("No metadata objects found")
                 elif len(rows) > 1:
-                    logger.info(f"Expected one row of metadata for name {f.name} and type {f.type}, but got {len(rows)}.")
+                    logger.info(f"Expected one row of metadata for '{f.name}' ({f.metadata_type}), but got {len(rows)}.")
                     raise RuntimeError("Too many fitting metadata objects found")
                 row = rows[0]
                 return json.loads(row[0])
 
     def write(self, f: FoundryTypes):
+        logger.info(f"Writing metadata for '{f.name}' ({f.metadata_type})")
         obj = dataclasses.asdict(f)
         with closing(sqlite3.connect(self.dbpath)) as connection:
             with connection:
                 connection.execute(
                     "INSERT INTO foundrymetadata (name, type, data) VALUES (?, ?, ?)",
-                    (f.name, f.type, json.dumps(obj)))
+                    (f.name, f.metadata_type, json.dumps(obj)))
 
 class LocalStorage:
     def __init__(
@@ -259,6 +263,9 @@ class LocalStorage:
     def write_metadata(self, f: FoundryTypes):
         self.metadatastorage.write(f)
 
+    # Need to be able to pass in the parent as an additional type, as the
+    # JournalEntryPages do *not* keep a reference to the JournalEntry they are
+    # contained in.
     def path(self, f: FoundryTypes):
         parents = [f]
         tmp = f
@@ -280,23 +287,29 @@ class LocalStorage:
             fullpath = self.fullpath(f)
         # TODO: Extract into polymorphism
         if isinstance(f, FoundryFolder):
+            logger.info("Writing folder: %s", fullpath)
             os.makedirs(fullpath, exist_ok=True)
         elif isinstance(f, FoundryJournalEntry):
+            logger.info("Writing entry: %s", fullpath)
             os.makedirs(fullpath, exist_ok=True)
         elif isinstance(f, FoundryJournalEntryPage):
-            with open(fullpath, "w") as fd:
-                fd.write(pypandoc.convert_text(f.text["content"], self.format, format="html"))
+            with open(fullpath.with_suffix("." + self.format), "w") as fd:
+                logger.info("Writing page: %s", fullpath)
+                fd.write(pypandoc.convert_text(
+                    f.text["content"],
+                    self.format,
+                    format="html"))
         self.write_metadata(f)
 
     def write_all(self):
         """Write all FoundryObjects to the filesystem."""
-        for f in self.folders:
-            self.write(f)
-        for n in self.journalentries:
-            self.write(n)
-            fullpath = self.fullpath(n)
-            for p in n.pages:
-                self.write(p, "/".join([fullpath, p.path(self.format)]))
+        for folder in self.folders:
+            self.write(folder)
+        for note in self.journalentries:
+            self.write(note)
+            fullpath = self.fullpath(note)
+            for page in note.pages:
+                self.write(page, fullpath / self.path(page))
 
     @classmethod
     def load_metadata(cls, path):
@@ -342,7 +355,7 @@ class LocalStorage:
         if entry.parent != self.root_directory:
             parent = self.read_metadata(FoundryFolder(None, entry.parent.name))
             if parent:
-                id = parent['id']
+                id = parent['_id']
             else:
                 logger.error(f"Can not find parent for new entry: {entry.absolute()}")
         return FoundryJournalEntry(None, id, entry.name, [], False)
@@ -350,10 +363,9 @@ class LocalStorage:
     def make_page(self, page: pathlib.Path):
         return FoundryJournalEntryPage(None, page.name, False, None)
 
-
     def read_all(self) -> Self:
         folders = set()
-        entries = set()
+        entries = dict()
         for child in self.root_directory.rglob("*"):
             logger.info(f"Loading {child.absolute()}")
             if child.absolute() == self.metadatastorage.dbpath:
@@ -368,13 +380,24 @@ class LocalStorage:
                     folder = FoundryFolder(**folder_metadata)
                 folders.add(folder)
             if child.is_file():
-                parent_entry_metadata = self.read_metadata(FoundryJournalEntry(None, child.parent.parent.name, child.parent.name, [], False))
-                if not parent_entry_metadata:
-                    logger.info(f"Did not find matching metadata for entry: {child.parent.name}")
-                    parent_entry = self.make_entry(child.parent)
+                if child.parent.name in entries:
+                    parent_entry = entries[child.parent.name]
                 else:
-                    parent_entry = FoundryJournalEntry(**parent_entry_metadata)
-                page_metadata = self.read_metadata(FoundryJournalEntryPage(None, child.name, False, ""))
+                    parent_entry_metadata = self.read_metadata(
+                        FoundryJournalEntry(None, child.parent.parent.name,
+                                            child.parent.name, [], False))
+                    if not parent_entry_metadata:
+                        logger.info(f"Did not find matching metadata for entry: {child.parent.name}")
+                        parent_entry = self.make_entry(child.parent)
+                    else:
+                        parent_entry = FoundryJournalEntry(**parent_entry_metadata)
+                        # Metadata loaded entries contain the pages as dicts already
+                        parent_entry.pages.clear()
+                    entries[parent_entry.name] = parent_entry
+                tmp_page = FoundryJournalEntryPage(
+                    None, child.name.split(".")[0],
+                    False, "")
+                page_metadata = self.read_metadata(tmp_page)
                 if not page_metadata:
                     logger.info(f"Did not find matching metadata for page: {child.name}")
                     page = self.make_page(child)
@@ -401,4 +424,7 @@ class LocalStorage:
                 )
                 page.text["content"] = content
                 parent_entry.pages.append(page)
-        return LocalStorage(self.root_directory, self.format, folders, entries)
+        return LocalStorage(self.root_directory,
+                            self.format,
+                            folders,
+                            entries.values())
