@@ -4,7 +4,6 @@ from contextlib import closing
 import dataclasses
 import sqlite3
 from enum import Enum
-import glob
 import json
 import logging
 import pathlib
@@ -158,14 +157,14 @@ class Foundry:
             name: "{page.name}",
             type: "text",
             text: {{
-                content: "{page.text[content]}",
+                content: `{page.text[content]}`,
                 format: CONST.JOURNAL_ENTRY_PAGE_FORMATS.HTML
             }}
         }}]);
         """
         UPDATE_PAGE="""
-        const page = entry.pages.find(p => p._id === "{page._id}");
-        page?.update({{content: "{page.text[content]}"}});
+        page = entry.pages.find(p => p._id === "{page._id}");
+        page?.update({{content: `{page.text[content]}`}});
         """
         if not note._id:
             logger.info(f"Creating a new note for: {note.name}")
@@ -174,7 +173,6 @@ class Foundry:
             entry_script = FIND_ENTRY.format(note=note)
         page_script = ""
         for page in note.pages:
-            import pdb; pdb.set_trace()
             if not page._id:
                 logger.info(f"Creating a new page for: {page.name}")
                 page_script += CREATE_PAGE.format(page=page)
@@ -189,15 +187,15 @@ class Foundry:
     async def upload_note(self, note: FoundryJournalEntry):
         script = self.create_upload_script(note)
         page = await self.login()
-        if not self.journal_entries:
-            await self.download_notes()
+        logger.info("Script: %s", script)
         await page.goto(self.url + "/game", wait_until="networkidle", timeout=60000)
-        await page.wait_for_selector('a[title="Journal Entries"]')
+        await page.wait_for_selector('a[data-tab="journal"]')
         await page.evaluate(script)
 
 
 FoundryTypes: TypeAlias = Union[FoundryFolder, FoundryJournalEntry,
                                 FoundryJournalEntryPage]
+
 
 class MetadataStorage:
     def __init__(self, root_directory: pathlib.Path,
@@ -210,7 +208,11 @@ class MetadataStorage:
     def init_database(self):
         with closing(sqlite3.connect(self.dbpath)) as connection:
             with connection:
-                connection.execute("CREATE TABLE IF NOT EXISTS foundrymetadata (name varchar(32), type varchar(64), data json)")
+                connection.execute("""CREATE TABLE IF NOT EXISTS foundrymetadata(
+                name varchar(32),
+                type varchar(64),
+                data json,
+                UNIQUE (name, type))""")
 
     def read(self, f: FoundryTypes) -> dict[Any, Any]:
         with closing(sqlite3.connect(self.dbpath)) as connection:
@@ -234,9 +236,11 @@ class MetadataStorage:
         obj = dataclasses.asdict(f)
         with closing(sqlite3.connect(self.dbpath)) as connection:
             with connection:
+                json_data = json.dumps(obj)
                 connection.execute(
-                    "INSERT INTO foundrymetadata (name, type, data) VALUES (?, ?, ?)",
-                    (f.name, f.metadata_type, json.dumps(obj)))
+                    """INSERT INTO foundrymetadata (name, type, data) VALUES (?, ?, ?)
+                    ON CONFLICT (name, type) DO UPDATE SET data = ?""",
+                    (f.name, f.metadata_type, json_data, json_data))
 
 class LocalStorage:
     def __init__(
@@ -345,7 +349,7 @@ class LocalStorage:
         if folder.parent != self.root_directory:
             parent = self.read_metadata(FoundryFolder(None, folder.parent.name))
             if parent:
-                id = parent['id']
+                id = parent['_id']
             else:
                 logger.error(f"Can not find parent for new folder: {folder.absolute()}")
         return FoundryFolder(None, folder.name, folder=id)
@@ -361,7 +365,7 @@ class LocalStorage:
         return FoundryJournalEntry(None, id, entry.name, [], False)
 
     def make_page(self, page: pathlib.Path):
-        return FoundryJournalEntryPage(None, page.name, False, None)
+        return FoundryJournalEntryPage(None, page.name.split(".")[0], False, None)
 
     def read_all(self) -> Self:
         folders = set()
