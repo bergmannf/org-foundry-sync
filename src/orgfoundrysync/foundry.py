@@ -164,7 +164,7 @@ class Foundry:
         """
         UPDATE_PAGE="""
         page = entry.pages.find(p => p._id === "{page._id}");
-        page?.update({{content: `{page.text[content]}`}});
+        page?.update({{'text.content': `{page.text[content]}`}});
         """
         if not note._id:
             logger.info(f"Creating a new note for: {note.name}")
