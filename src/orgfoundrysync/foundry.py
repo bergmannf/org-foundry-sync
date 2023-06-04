@@ -50,6 +50,7 @@ class FoundryJournalEntryPage:
     sort: int
     src: Optional[str]
     metadata_type: str = "JournalEntryPage"
+    _stats: Optional[Dict] = dataclasses.field(default_factory=dict, hash=False)
     flags: Dict[Any, Any] = dataclasses.field(default_factory=dict, hash=False)
     image: Dict[Any, Any] = dataclasses.field(default_factory=dict, hash=False)
     ownership: Dict[Any, Any] = dataclasses.field(default_factory=dict, hash=False)
@@ -137,7 +138,7 @@ class Foundry:
     async def download_notes(self):
         page = await self.login()
         await page.goto(self.url + "/game", wait_until="networkidle")
-        await page.wait_for_selector('a[data-tooltip="DOCUMENT.JournalEntries"]')
+        await page.wait_for_selector('a[data-tooltip="DOCUMENT.JournalEntries"], a[data-tooltip="SIDEBAR.TabJournal"]')
         logger.info("Downloading folders")
         self.folders = await page.evaluate(
             '() => { return game.folders.filter(j => j.type === "JournalEntry").map(f => f.toJSON()) }'
