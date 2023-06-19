@@ -182,17 +182,16 @@ async def process_queue(args, queue: queue.Queue):
                 storage.write_all()
                 logger.info("Notes stored")
             if isinstance(task, commands.UploadAllNotes):
-                storage = LocalStorage(pathlib.Path(args.root_dir),
-                                       args.target_format)
+                storage = LocalStorage(pathlib.Path(args.root_dir), args.target_format)
                 storage = storage.read_all()
                 logger.info("Uploading all notes")
                 for note in storage.journalentries:
                     await foundry.upload_note(note)
                 logger.info("Uploading finished")
+                queue.put(commands.DownloadAllNotes())
             if isinstance(task, commands.UploadNote):
                 logger.info(f"Uploading note {task}")
-                storage = LocalStorage(pathlib.Path(args.root_dir),
-                                       args.target_format)
+                storage = LocalStorage(pathlib.Path(args.root_dir), args.target_format)
                 storage = storage.read_all()
                 try:
                     note = next(

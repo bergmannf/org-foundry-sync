@@ -19,6 +19,8 @@ logger.setLevel(logging.INFO)
 
 
 class NoteUploadResult(Enum):
+    """Result of the note uploading."""
+
     NoteCreated = 0
     NoteUpdated = 1
 
@@ -26,6 +28,7 @@ class NoteUploadResult(Enum):
 @dataclasses.dataclass(frozen=True, eq=True)
 class FoundryFolder:
     """Represents a folder in the VTT."""
+
     _id: str
     name: str
     _stats: Optional[Dict] = dataclasses.field(default_factory=dict, hash=False)
@@ -108,8 +111,7 @@ class Foundry:
     def journal_entries(self, entries):
         _entries = []
         for entry in entries:
-            journal_pages = [FoundryJournalEntryPage(**page) for page in
-                             entry["pages"]]
+            journal_pages = [FoundryJournalEntryPage(**page) for page in entry["pages"]]
             entry["pages"] = journal_pages
             journal_entry = FoundryJournalEntry(**entry)
             _entries.append(journal_entry)
@@ -138,7 +140,9 @@ class Foundry:
     async def download_notes(self):
         page = await self.login()
         await page.goto(self.url + "/game", wait_until="networkidle")
-        await page.wait_for_selector('a[data-tooltip="DOCUMENT.JournalEntries"], a[data-tooltip="SIDEBAR.TabJournal"]')
+        await page.wait_for_selector(
+            'a[data-tooltip="DOCUMENT.JournalEntries"], a[data-tooltip="SIDEBAR.TabJournal"]'
+        )
         logger.info("Downloading folders")
         self.folders = await page.evaluate(
             '() => { return game.folders.filter(j => j.type === "JournalEntry").map(f => f.toJSON()) }'
@@ -149,11 +153,15 @@ class Foundry:
         )
         return [self.folders, self.journal_entries]
 
-    def create_upload_script(self, note: FoundryJournalEntry) -> str:
-        CREATE_ENTRY="""let entry = JournalEntry.create(data = {{"name": "{note.name}", "folder": "{note.folder}"}});"""
-        FIND_ENTRY="""let entry = game.journal.filter(j => j.id === "{note._id}")[0];"""
+    def create_upload_script(
+        self, note: FoundryJournalEntry
+    ) -> (NoteUploadResult, str):
+        CREATE_ENTRY = """let entry = JournalEntry.create(data = {{"name": "{note.name}", "folder": "{note.folder}"}});"""
+        FIND_ENTRY = (
+            """let entry = game.journal.filter(j => j.id === "{note._id}")[0];"""
+        )
 
-        CREATE_PAGE="""
+        CREATE_PAGE = """
         entry.createEmbeddedDocuments("JournalEntryPage", [{{
             name: "{page.name}",
             type: "text",
@@ -163,15 +171,17 @@ class Foundry:
             }}
         }}]);
         """
-        UPDATE_PAGE="""
+        UPDATE_PAGE = """
         page = entry.pages.find(p => p._id === "{page._id}");
         page?.update({{'text.content': `{page.text[content]}`}});
         """
         if not note._id:
             logger.info(f"Creating a new note for: {note.name}")
             entry_script = CREATE_ENTRY.format(note=note)
+            result = NoteUploadResult.NoteCreated
         else:
             entry_script = FIND_ENTRY.format(note=note)
+            result = NoteUploadResult.NoteUpdated
         page_script = ""
         for page in note.pages:
             if not page._id:
@@ -183,24 +193,31 @@ class Foundry:
         {entry_script}
         {page_script}
         }}"""
-        return script
+        return (result, script)
 
-    async def upload_note(self, note: FoundryJournalEntry):
-        script = self.create_upload_script(note)
+    async def upload_note(self, note: FoundryJournalEntry) -> NoteUploadResult:
+        """Upload a note to Foundry.#
+
+        @returns NoteUploadResul
+        """
+        (result, script) = self.create_upload_script(note)
         page = await self.login()
         logger.info("Script: %s", script)
         await page.goto(self.url + "/game", wait_until="networkidle", timeout=60000)
         await page.wait_for_selector('a[data-tab="journal"]')
         await page.evaluate(script)
+        return result
 
 
-FoundryTypes: TypeAlias = Union[FoundryFolder, FoundryJournalEntry,
-                                FoundryJournalEntryPage]
+FoundryTypes: TypeAlias = Union[
+    FoundryFolder, FoundryJournalEntry, FoundryJournalEntryPage
+]
 
 
 class MetadataStorage:
-    def __init__(self, root_directory: pathlib.Path,
-                 dbname: str = "orgfoundrysync-metadata.db"):
+    def __init__(
+        self, root_directory: pathlib.Path, dbname: str = "orgfoundrysync-metadata.db"
+    ):
         self.root_directory = root_directory
         self.dbname = dbname
         self.dbpath = self.root_directory / self.dbname
@@ -209,25 +226,31 @@ class MetadataStorage:
     def init_database(self):
         with closing(sqlite3.connect(self.dbpath)) as connection:
             with connection:
-                connection.execute("""CREATE TABLE IF NOT EXISTS foundrymetadata(
+                connection.execute(
+                    """CREATE TABLE IF NOT EXISTS foundrymetadata(
                 name varchar(32),
                 type varchar(64),
                 data json,
-                UNIQUE (name, type))""")
+                UNIQUE (name, type))"""
+                )
 
     def read(self, f: FoundryTypes) -> dict[Any, Any]:
         with closing(sqlite3.connect(self.dbpath)) as connection:
             with connection:
                 result = connection.execute(
                     "SELECT data FROM foundrymetadata WHERE name = (?) AND type = (?)",
-                    (f.name, f.metadata_type)
+                    (f.name, f.metadata_type),
                 )
                 rows = result.fetchall()
                 if len(rows) == 0:
-                    logger.info(f"Did not find any metadata for '{f.name}' ({f.metadata_type})")
+                    logger.info(
+                        f"Did not find any metadata for '{f.name}' ({f.metadata_type})"
+                    )
                     raise RuntimeError("No metadata objects found")
                 elif len(rows) > 1:
-                    logger.info(f"Expected one row of metadata for '{f.name}' ({f.metadata_type}), but got {len(rows)}.")
+                    logger.info(
+                        f"Expected one row of metadata for '{f.name}' ({f.metadata_type}), but got {len(rows)}."
+                    )
                     raise RuntimeError("Too many fitting metadata objects found")
                 row = rows[0]
                 return json.loads(row[0])
@@ -241,15 +264,17 @@ class MetadataStorage:
                 connection.execute(
                     """INSERT INTO foundrymetadata (name, type, data) VALUES (?, ?, ?)
                     ON CONFLICT (name, type) DO UPDATE SET data = ?""",
-                    (f.name, f.metadata_type, json_data, json_data))
+                    (f.name, f.metadata_type, json_data, json_data),
+                )
+
 
 class LocalStorage:
     def __init__(
-            self,
-            root_directory: pathlib.Path,
-            format: str,
-            folders: List[FoundryFolder] = None,
-            journalentries: List[FoundryJournalEntry] = None,
+        self,
+        root_directory: pathlib.Path,
+        format: str,
+        folders: List[FoundryFolder] = None,
+        journalentries: List[FoundryJournalEntry] = None,
     ):
         self.root_directory = root_directory
         self.format = format
@@ -284,9 +309,11 @@ class LocalStorage:
     def fullpath(self, f: Union[FoundryFolder, FoundryJournalEntry]):
         return self.root_directory / self.path(f)
 
-    def write(self, f: Union[FoundryFolder, FoundryJournalEntry,
-                             FoundryJournalEntryPage],
-              fullpath: pathlib.Path = None):
+    def write(
+        self,
+        f: Union[FoundryFolder, FoundryJournalEntry, FoundryJournalEntryPage],
+        fullpath: pathlib.Path = None,
+    ):
         """Write a single FoundryObject to the fileysstem."""
         if not fullpath:
             fullpath = self.fullpath(f)
@@ -300,10 +327,9 @@ class LocalStorage:
         elif isinstance(f, FoundryJournalEntryPage):
             with open(fullpath.with_suffix("." + self.format), "w") as fd:
                 logger.info("Writing page: %s", fullpath)
-                fd.write(pypandoc.convert_text(
-                    f.text["content"],
-                    self.format,
-                    format="html"))
+                fd.write(
+                    pypandoc.convert_text(f.text["content"], self.format, format="html")
+                )
         self.write_metadata(f)
 
     def write_all(self):
@@ -350,7 +376,7 @@ class LocalStorage:
         if folder.parent != self.root_directory:
             parent = self.read_metadata(FoundryFolder(None, folder.parent.name))
             if parent:
-                id = parent['_id']
+                id = parent["_id"]
             else:
                 logger.error(f"Can not find parent for new folder: {folder.absolute()}")
         return FoundryFolder(None, folder.name, folder=id)
@@ -360,7 +386,7 @@ class LocalStorage:
         if entry.parent != self.root_directory:
             parent = self.read_metadata(FoundryFolder(None, entry.parent.name))
             if parent:
-                id = parent['_id']
+                id = parent["_id"]
             else:
                 logger.error(f"Can not find parent for new entry: {entry.absolute()}")
         return FoundryJournalEntry(None, id, entry.name, [], False)
@@ -379,7 +405,9 @@ class LocalStorage:
             if child.is_dir() and not any([c.is_file() for c in child.iterdir()]):
                 folder_metadata = self.read_metadata(FoundryFolder(None, child.name))
                 if not folder_metadata:
-                    logger.info(f"Did not find matching metadata for folder: {child.name}")
+                    logger.info(
+                        f"Did not find matching metadata for folder: {child.name}"
+                    )
                     folder = self.make_folder(child)
                 else:
                     folder = FoundryFolder(**folder_metadata)
@@ -389,10 +417,14 @@ class LocalStorage:
                     parent_entry = entries[child.parent.name]
                 else:
                     parent_entry_metadata = self.read_metadata(
-                        FoundryJournalEntry(None, child.parent.parent.name,
-                                            child.parent.name, [], False))
+                        FoundryJournalEntry(
+                            None, child.parent.parent.name, child.parent.name, [], False
+                        )
+                    )
                     if not parent_entry_metadata:
-                        logger.info(f"Did not find matching metadata for entry: {child.parent.name}")
+                        logger.info(
+                            f"Did not find matching metadata for entry: {child.parent.name}"
+                        )
                         parent_entry = self.make_entry(child.parent)
                     else:
                         parent_entry = FoundryJournalEntry(**parent_entry_metadata)
@@ -400,11 +432,13 @@ class LocalStorage:
                         parent_entry.pages.clear()
                     entries[parent_entry.name] = parent_entry
                 tmp_page = FoundryJournalEntryPage(
-                    None, child.name.split(".")[0],
-                    False, "")
+                    None, child.name.split(".")[0], False, ""
+                )
                 page_metadata = self.read_metadata(tmp_page)
                 if not page_metadata:
-                    logger.info(f"Did not find matching metadata for page: {child.name}")
+                    logger.info(
+                        f"Did not find matching metadata for page: {child.name}"
+                    )
                     page = self.make_page(child)
                 else:
                     page = FoundryJournalEntryPage(**page_metadata)
@@ -429,7 +463,4 @@ class LocalStorage:
                 )
                 page.text["content"] = content
                 parent_entry.pages.append(page)
-        return LocalStorage(self.root_directory,
-                            self.format,
-                            folders,
-                            entries.values())
+        return LocalStorage(self.root_directory, self.format, folders, entries.values())
